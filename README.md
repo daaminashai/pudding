@@ -7,10 +7,10 @@ each draft, edit it if you want, and approve or discard it. Nothing is sent with
 
 ```
 npm start
-  → learns from your docs and past replies
-  → finds open conversations whose latest message is from the sender
-  → skips automated mail and anything that needs no answer, drafts the rest
-  → http://localhost:4545: review, edit, approve / redo / discard
+  → finds open conversations with new activity since the last check
+  → skips automated mail and anything that needs no answer
+  → learns from your docs and past replies, and drafts the rest
+  → http://localhost:4545: review, edit, approve / rewrite / discard
 ```
 
 By default **Approve** saves your final text and copies it to the clipboard for you to paste into the conversation in
@@ -86,8 +86,12 @@ an editable box, and badges for what to look at:
 - **Redo…** redrafts, optionally with instructions ("shorter", "mention the deadline", "say no politely").
 - **Discard** drops the draft. That email won't be drafted again unless the sender writes back.
 
-Drafts persist in `data/state.db`, so you can stop and come back. A later check skips emails that already have a draft,
-replaces drafts whose conversation got a new message, and retires drafts for conversations someone answered in Jelly.
+Drafts persist in `data/state.db`, so you can stop and come back. Pudding also remembers when it last checked each
+conversation, so a later check (including the one at startup) only fetches conversations with a new message since
+then, and only calls the model for emails that don't have a draft yet. If nothing needs drafting, it doesn't load the
+docs or past replies either. A check replaces drafts whose conversation got a new message and retires drafts for
+conversations someone answered in Jelly. Anything that failed (Marmalade down, the model rate-limited) is tried again
+on the next check.
 
 `npm run scan` does the same check without the dashboard, for queueing drafts ahead of time.
 

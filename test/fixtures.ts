@@ -62,6 +62,12 @@ export function conversation(
   };
 }
 
+/** The conversation with one more message, as Marmalade would show it (lastMessageAt moves too). */
+export function withMessage(c: ConversationDetail, o: MessageOptions = {}): ConversationDetail {
+  const added = message(c.id, o);
+  return { ...c, messages: [...c.messages, added], messagesCount: c.messagesCount + 1, lastMessageAt: added.createdAt };
+}
+
 export const fixtures = {
   clean: () => conversation({ id: "cnv_clean" }),
   noreplySender: () => conversation({ messages: [{ from: "no-reply@service.example" }] }),

@@ -13,7 +13,7 @@ import { findAiTells } from "./humanize.js";
 import { learnFromPastConversations, loadDocs, loadStyle, type Knowledge, type Style } from "./knowledge.js";
 import { LlmError, type Drafter } from "./llm.js";
 import { log } from "./log.js";
-import { MarmaladeError, type MarmaladeClient } from "./marmalade.js";
+import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from "./marmalade.js";
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
 import type { State } from "./state.js";
@@ -47,14 +47,23 @@ export async function memberNames(marmalade: ScanDeps["marmalade"]): Promise<Map
 }
 
 export interface ScanProgress {
-  phase: "learning" | "listing" | "drafting" | "done";
+  phase: "listing" | "drafting" | "done";
   message: string;
+  /** Conversations with new activity since they were last checked. */
   conversations: number;
+  /** Open conversations with nothing new, which weren't fetched again. */
+  unchanged: number;
   processed: number;
   drafted: number;
   skipped: number;
   errors: string[];
 }
+
+/** Knowledge is only loaded once something actually needs drafting. */
+export type KnowledgeSource = () => Promise<Knowledge>;
+
+/** Loading the docs or past replies failed, so nothing can be drafted this run. */
+class KnowledgeError extends Error {}
 
 /** Approved replies kept as examples, on top of the ones learned from history. */
 const APPROVED_EXAMPLES = 40;
@@ -104,18 +113,21 @@ export function withSignOff(reply: string, style: Style): string {
 }
 
 /**
- * Finds every open conversation whose latest message is inbound and hasn't been
- * drafted or skipped yet, and writes a draft for each into the queue. Sends nothing.
+ * Finds open conversations with new activity since the last scan and drafts a
+ * reply for each one whose latest message is inbound and hasn't been drafted or
+ * skipped yet. Conversations with nothing new aren't fetched again, and the
+ * docs and past replies are only loaded if something needs drafting. Sends nothing.
  */
 export async function scan(
   deps: ScanDeps,
   onProgress: (p: ScanProgress) => void = () => {},
-): Promise<{ knowledge: Knowledge; progress: ScanProgress }> {
-  const { config, marmalade } = deps;
+): Promise<{ knowledge: Knowledge | null; progress: ScanProgress; names: Map<string, string> }> {
+  const { config, marmalade, state } = deps;
   const progress: ScanProgress = {
-    phase: "learning",
-    message: "Loading knowledge…",
+    phase: "listing",
+    message: "Looking for new emails…",
     conversations: 0,
+    unchanged: 0,
     processed: 0,
     drafted: 0,
     skipped: 0,
@@ -125,10 +137,8 @@ export async function scan(
     Object.assign(progress, patch);
     onProgress({ ...progress, errors: [...progress.errors] });
   };
+  report({});
 
-  const knowledge = await buildKnowledge(deps, (message) => report({ message }));
-
-  report({ phase: "listing", message: "Looking for unanswered emails…" });
   // startDate filters on when a conversation was created, which would miss new
   // replies in old threads, so list every open conversation and filter here.
   const list = await marmalade.listConversations(config.mailboxId, {
@@ -138,19 +148,43 @@ export async function scan(
   });
   const cutoff = Date.now() - config.unansweredLookbackDays * 24 * 3600_000;
   const recent = list.filter((l) => Date.parse(l.conversation.lastMessageAt) >= cutoff);
-  const ids = uniqueIds(recent).reverse(); // oldest first
-  report({ phase: "drafting", conversations: ids.length, message: `Checking ${ids.length} open conversations…` });
+  const activity = new Map<string, string>();
+  for (const { conversation } of recent) {
+    const at = normalizeTime(conversation.lastMessageAt);
+    const prev = activity.get(conversation.id);
+    if (prev === undefined || at > prev) activity.set(conversation.id, at);
+  }
+  const ids = uniqueIds(recent)
+    .reverse() // oldest first
+    .filter((id) => state.lastChecked(id) !== activity.get(id));
+  const unchanged = activity.size - ids.length;
+  if (ids.length === 0) {
+    report({ phase: "done", unchanged, message: "No new emails since the last check." });
+    return { knowledge: null, progress, names: new Map() };
+  }
+  report({
+    phase: "drafting",
+    conversations: ids.length,
+    unchanged,
+    message: `Checking ${ids.length} conversation(s) with new activity…`,
+  });
 
-  let fatal: LlmError | null = null;
+  let knowledge: Promise<Knowledge> | null = null;
+  const getKnowledge: KnowledgeSource = () =>
+    (knowledge ??= buildKnowledge(deps, (message) => report({ message })).catch((err) => {
+      throw new KnowledgeError(`couldn't load the docs and past replies: ${errorMessage(err)}`);
+    }));
+
+  let fatal: Error | null = null;
   const names = await memberNames(marmalade);
   await pool(ids, CONCURRENCY, async (conversationId) => {
     if (fatal) return;
     try {
-      const outcome = await processConversation(deps, knowledge, conversationId, { names });
+      const outcome = await processConversation(deps, getKnowledge, conversationId, { names });
       if (outcome === "drafted") progress.drafted++;
       if (outcome === "skipped") progress.skipped++;
     } catch (err) {
-      if (err instanceof LlmError && err.fatal) {
+      if ((err instanceof LlmError && err.fatal) || err instanceof KnowledgeError) {
         fatal ??= err;
         return;
       }
@@ -162,15 +196,17 @@ export async function scan(
     report({ message: `Checked ${progress.processed} of ${ids.length}…` });
   });
 
-  if (fatal) {
+  const stopped = fatal as Error | null; // set inside the workers, which TypeScript can't see
+  if (stopped) {
     // Drafts written so far are saved; the dashboard shows this as the run's error.
-    throw new LlmError(`Stopped after ${progress.drafted} new draft(s): ${(fatal as LlmError).message}`, false, true);
+    const message = `Stopped after ${progress.drafted} new draft(s): ${stopped.message}`;
+    throw stopped instanceof LlmError ? new LlmError(message, false, true) : new Error(message);
   }
   report({
     phase: "done",
     message: `Done: ${progress.drafted} new draft(s), ${progress.skipped} skipped, ${progress.errors.length} error(s).`,
   });
-  return { knowledge, progress };
+  return { knowledge: knowledge ? await knowledge : null, progress, names };
 }
 
 type Outcome = "drafted" | "skipped" | "seen" | "answered" | "empty";
@@ -181,18 +217,31 @@ export function uniqueIds(rows: Array<{ conversation: { id: string } }>): string
 }
 
 /**
- * Drafts the latest inbound message in one conversation, or records why not.
- * `force` (the dashboard's "Draft anyway") skips the skip checks and asks the
- * drafter for a reply even if it would say none is needed.
+ * Drafts the latest inbound message in one conversation, or records why not,
+ * then remembers the conversation as checked. `force` (the dashboard's "Draft
+ * anyway") skips the skip checks and asks the drafter for a reply even if it
+ * would say none is needed.
  */
 export async function processConversation(
   deps: ScanDeps,
-  knowledge: Knowledge,
+  knowledge: KnowledgeSource,
   conversationId: string,
+  options: { force?: boolean; names?: Map<string, string> } = {},
+): Promise<Outcome> {
+  const conversation = await deps.marmalade.getConversation(deps.config.mailboxId, conversationId);
+  const outcome = await handleConversation(deps, knowledge, conversation, options);
+  // Only once it's fully handled: anything that threw gets another go next scan.
+  deps.state.markChecked(conversation.id, normalizeTime(conversation.lastMessageAt));
+  return outcome;
+}
+
+async function handleConversation(
+  deps: ScanDeps,
+  getKnowledge: KnowledgeSource,
+  conversation: ConversationDetail,
   { force = false, names = new Map<string, string>() } = {},
 ): Promise<Outcome> {
   const { config, marmalade, state, drafter } = deps;
-  const conversation = await marmalade.getConversation(config.mailboxId, conversationId);
   const latest = latestMessage(conversation);
   if (!latest) return "empty";
   if (!latest.isInbound) {
@@ -221,6 +270,7 @@ export async function processConversation(
   ].filter((f): f is Flag => f !== null);
 
   const thread = toThread(conversation);
+  const knowledge = await getKnowledge();
   let content;
   try {
     const result = await drafter.draft({ thread, knowledge, senderName: sender.name, forceReply: force });
@@ -263,6 +313,12 @@ export async function processConversation(
 /** Marmalade doesn't always include a link, so build one from JELLY_CONVERSATION_URL (with {id}). */
 export function jellyUrl(template: string | undefined, conversationId: string): string | null {
   return template ? template.replace("{id}", encodeURIComponent(conversationId)) : null;
+}
+
+/** Marmalade timestamps, compared as text, so they need one format. */
+function normalizeTime(value: string): string {
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? value : new Date(t).toISOString();
 }
 
 async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {

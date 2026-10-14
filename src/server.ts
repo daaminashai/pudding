@@ -52,13 +52,11 @@ export class Dashboard {
   startScan(): Promise<void> {
     if (this.scanPromise) return this.scanPromise;
     Object.assign(this.scanStatus, { running: true, error: null, progress: null });
-    this.scanPromise = memberNames(this.deps.marmalade)
-      .then((names) => {
-        this.names = names;
-        return scan(this.deps, (p) => (this.scanStatus.progress = p));
-      })
-      .then(({ knowledge, progress }) => {
-        this.knowledge = knowledge;
+    this.scanPromise = scan(this.deps, (p) => (this.scanStatus.progress = p))
+      .then(({ knowledge, progress, names }) => {
+        // A scan with nothing new loads neither, so keep what's already known.
+        if (knowledge) this.knowledge = knowledge;
+        if (names.size > 0) this.names = names;
         log.info(progress.message, { errors: progress.errors.length });
       })
       .catch((err) => {
@@ -70,6 +68,10 @@ export class Dashboard {
         this.scanPromise = null;
       });
     return this.scanPromise;
+  }
+
+  private async getKnowledge(): Promise<Knowledge> {
+    return (this.knowledge ??= await buildKnowledge(this.deps));
   }
 
   createServer(): http.Server {
@@ -205,11 +207,13 @@ export class Dashboard {
     const { state } = this.deps;
     const skipped = state.getSkipped(messageId);
     if (!skipped) return send(res, 404, { error: "no skipped email with that id" });
-    this.knowledge ??= await buildKnowledge(this.deps);
     state.removeSkipped(messageId);
     try {
       const names = await memberNames(this.deps.marmalade);
-      const outcome = await processConversation(this.deps, this.knowledge, skipped.conversationId, { force: true, names });
+      const outcome = await processConversation(this.deps, () => this.getKnowledge(), skipped.conversationId, {
+        force: true,
+        names,
+      });
       return send(res, 200, { outcome });
     } catch (err) {
       state.addSkipped(skipped);
@@ -231,8 +235,7 @@ export class Dashboard {
     const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
     const current = typeof body.text === "string" ? body.text : draft.draft;
 
-    this.knowledge ??= await buildKnowledge(this.deps);
-    const knowledge = this.knowledge;
+    const knowledge = await this.getKnowledge();
     const thread = { subject: draft.subject, entries: draft.thread };
     const result = await drafter.draft({
       thread,

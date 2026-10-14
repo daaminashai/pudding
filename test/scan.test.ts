@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { LlmError } from "../src/llm.js";
 import { scan } from "../src/scan.js";
-import { conversation, fixtures, message } from "./fixtures.js";
-import { scanDeps } from "./helpers.js";
+import { conversation, fixtures, withMessage } from "./fixtures.js";
+import { MAILBOX, scanDeps } from "./helpers.js";
 
 describe("scan", () => {
   it("drafts every unanswered email and skips automated mail", async () => {
@@ -46,17 +46,47 @@ describe("scan", () => {
     expect(drafter.calls).toHaveLength(1);
   });
 
+  it("only fetches conversations with new activity on later scans", async () => {
+    const a = conversation({ id: "cnv_a", messages: [{ from: "a@example.com" }] });
+    const b = conversation({ id: "cnv_b", messages: [{ from: "b@example.com" }] });
+    const { deps, drafter, marmalade } = scanDeps([a, b]);
+    await scan(deps);
+    expect(drafter.calls).toHaveLength(2);
+
+    marmalade.requests.length = 0;
+    const { progress, knowledge } = await scan(deps);
+    expect(progress).toMatchObject({ phase: "done", conversations: 0, unchanged: 2, message: "No new emails since the last check." });
+    // One listing call, nothing fetched, nothing learned, no model calls.
+    expect(marmalade.requests.map((r) => r.url.pathname)).toEqual([`/api/rpc/mailboxes/${MAILBOX}/conversations`]);
+    expect(knowledge).toBeNull();
+    expect(drafter.calls).toHaveLength(2);
+
+    marmalade.conversations[1] = withMessage(b, { from: "b@example.com", text: "one more thing", minutesAgo: 1 });
+    marmalade.requests.length = 0;
+    const next = await scan(deps);
+    expect(next.progress).toMatchObject({ conversations: 1, unchanged: 1, drafted: 1 });
+    const fetched = marmalade.requests.map((r) => r.url.pathname).filter((p) => /conversations\/[^/]+$/.test(p));
+    expect(fetched).not.toContain(`/api/rpc/mailboxes/${MAILBOX}/conversations/cnv_a`);
+    expect(drafter.calls).toHaveLength(3);
+  });
+
+  it("doesn't load the docs or past replies when nothing new needs a draft", async () => {
+    const { deps, drafter, marmalade } = scanDeps([fixtures.noreplySender(), fixtures.latestOutbound()]);
+    const { knowledge, progress } = await scan(deps);
+    expect(progress).toMatchObject({ skipped: 1, drafted: 0 });
+    expect(knowledge).toBeNull();
+    expect(drafter.calls).toHaveLength(0);
+    // Learning lists conversations by startDate; without it there's no such call.
+    expect(marmalade.requests.some((r) => r.url.searchParams.has("startDate"))).toBe(false);
+  });
+
   it("replaces a pending draft when a newer message arrives", async () => {
     const c = fixtures.clean();
     const { deps, state, marmalade } = scanDeps([c]);
     await scan(deps);
     const first = state.pendingDrafts()[0]!;
 
-    marmalade.conversations[0] = {
-      ...c,
-      messages: [...c.messages, message(c.id, { text: "also, is it free?", minutesAgo: 1 })],
-      messagesCount: 2,
-    };
+    marmalade.conversations[0] = withMessage(c, { text: "also, is it free?", minutesAgo: 1 });
     await scan(deps);
 
     const pending = state.pendingDrafts();
@@ -69,10 +99,7 @@ describe("scan", () => {
     const c = fixtures.clean();
     const { deps, state, marmalade } = scanDeps([c]);
     await scan(deps);
-    marmalade.conversations[0] = {
-      ...c,
-      messages: [...c.messages, message(c.id, { inbound: false, from: "team@ours.example", minutesAgo: 1 })],
-    };
+    marmalade.conversations[0] = withMessage(c, { inbound: false, from: "team@ours.example", minutesAgo: 1 });
     await scan(deps);
     expect(state.pendingDrafts()).toEqual([]);
     expect(state.decidedDrafts()[0]).toMatchObject({ status: "stale", statusReason: "answered in Jelly" });
@@ -129,6 +156,11 @@ describe("scan", () => {
     const { progress } = await scan(deps);
     expect(progress.errors[0]).toMatch(/cnv_down.*503/);
     expect(state.pendingDrafts().map((d) => d.conversationId)).toEqual(["cnv_clean"]);
+
+    // It wasn't marked as checked, so the next scan tries it again.
+    marmalade.failing.delete("cnv_down");
+    const next = await scan(deps);
+    expect(next.progress).toMatchObject({ conversations: 1, drafted: 1, errors: [] });
   });
 
   it("learns from past replies and from approved drafts", async () => {

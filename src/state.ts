@@ -115,6 +115,13 @@ export class State {
         reason TEXT NOT NULL,
         at TEXT NOT NULL
       );
+      -- When each conversation was last checked, by its lastMessageAt, so a scan
+      -- only fetches conversations with new activity.
+      CREATE TABLE IF NOT EXISTS checked (
+        conversation_id TEXT PRIMARY KEY,
+        last_message_at TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+      );
       -- Q&A pairs learned from past conversations, cached by conversation updatedAt.
       CREATE TABLE IF NOT EXISTS learned (
         conversation_id TEXT PRIMARY KEY,
@@ -265,6 +272,24 @@ export class State {
       at: r.decided_at,
       source: "approved",
     }));
+  }
+
+  /** The conversation's lastMessageAt when it was last checked, if it has been. */
+  lastChecked(conversationId: string): string | undefined {
+    const row = this.db.prepare("SELECT last_message_at FROM checked WHERE conversation_id = ?").get(conversationId) as
+      | { last_message_at: string }
+      | undefined;
+    return row?.last_message_at;
+  }
+
+  markChecked(conversationId: string, lastMessageAt: string, now = new Date()): void {
+    this.db
+      .prepare(
+        `INSERT INTO checked (conversation_id, last_message_at, checked_at) VALUES (?, ?, ?)
+         ON CONFLICT (conversation_id) DO UPDATE SET last_message_at = excluded.last_message_at,
+           checked_at = excluded.checked_at`,
+      )
+      .run(conversationId, lastMessageAt, now.toISOString());
   }
 
   getLearned(conversationId: string): { updatedAt: string; examples: Example[] } | undefined {
