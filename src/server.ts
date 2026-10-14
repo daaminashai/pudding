@@ -102,19 +102,24 @@ export class Dashboard {
   }
 
   createServer(): http.Server {
-    const index = path.join(this.webDir, "index.html");
-    const html = fs.existsSync(index)
-      ? fs.readFileSync(index, "utf8").replace(TOKEN_PLACEHOLDER, this.token)
-      : "<!doctype html><p>The dashboard hasn't been built. Run <code>npm run build</code>, then restart.</p>";
     return http.createServer((req, res) => {
-      this.handle(req, res, html).catch((err) => {
+      this.handle(req, res).catch((err) => {
         log.error("request failed", { url: req.url, error: errorMessage(err) });
         send(res, 500, { error: errorMessage(err) });
       });
     });
   }
 
-  private async handle(req: http.IncomingMessage, res: http.ServerResponse, html: string) {
+  /** Read on every load, so a rebuild shows up on reload. */
+  private page(): string {
+    const index = path.join(this.webDir, "index.html");
+    if (!fs.existsSync(index)) {
+      return "<!doctype html><p>The dashboard hasn't been built. Run <code>npm run build</code>, then reload.</p>";
+    }
+    return fs.readFileSync(index, "utf8").replace(TOKEN_PLACEHOLDER, this.token);
+  }
+
+  private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const host = req.headers.host ?? "";
     const port = req.socket.localPort;
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return send(res, 403, { error: "bad host" });
@@ -129,7 +134,7 @@ export class Dashboard {
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy": CSP,
       });
-      return res.end(html);
+      return res.end(this.page());
     }
     const asset = /^\/assets\/([\w-]+(\.[\w-]+)+)$/.exec(url.pathname);
     if (req.method === "GET" && asset) return this.serveAsset(res, asset[1]!);
