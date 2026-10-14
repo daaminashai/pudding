@@ -4,6 +4,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { log } from "./log.js";
 import type { Knowledge } from "./knowledge.js";
 import { errorMessage } from "./redact.js";
@@ -35,8 +37,30 @@ interface ScanStatus {
   finishedAt: string | null;
 }
 
-const HTML_FILE = new URL("./dashboard.html", import.meta.url);
+/** Where `vite build` puts the dashboard. */
+const WEB_DIR = fileURLToPath(new URL("../dist/web/", import.meta.url));
+const TOKEN_PLACEHOLDER = "__PUDDING_TOKEN__";
 const MAX_BODY = 1_000_000;
+const CONTENT_TYPES: Record<string, string> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+};
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  // Radix and the toast library set inline styles.
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
 
 export class Dashboard {
   readonly token = crypto.randomBytes(24).toString("hex");
@@ -46,7 +70,10 @@ export class Dashboard {
   private names = new Map<string, string>();
   private scanPromise: Promise<void> | null = null;
 
-  constructor(private readonly deps: DashboardDeps) {}
+  constructor(
+    private readonly deps: DashboardDeps,
+    private readonly webDir = WEB_DIR,
+  ) {}
 
   /** Starts a scan unless one is already running. Resolves when it finishes. */
   startScan(): Promise<void> {
@@ -75,7 +102,10 @@ export class Dashboard {
   }
 
   createServer(): http.Server {
-    const html = fs.readFileSync(HTML_FILE, "utf8").replace("__TOKEN__", this.token);
+    const index = path.join(this.webDir, "index.html");
+    const html = fs.existsSync(index)
+      ? fs.readFileSync(index, "utf8").replace(TOKEN_PLACEHOLDER, this.token)
+      : "<!doctype html><p>The dashboard hasn't been built. Run <code>npm run build</code>, then restart.</p>";
     return http.createServer((req, res) => {
       this.handle(req, res, html).catch((err) => {
         log.error("request failed", { url: req.url, error: errorMessage(err) });
@@ -95,10 +125,14 @@ export class Dashboard {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "X-Frame-Options": "DENY",
-        "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": CSP,
       });
       return res.end(html);
     }
+    const asset = /^\/assets\/([\w-]+(\.[\w-]+)+)$/.exec(url.pathname);
+    if (req.method === "GET" && asset) return this.serveAsset(res, asset[1]!);
     if (!url.pathname.startsWith("/api/")) return send(res, 404, { error: "not found" });
     if (req.headers["x-pudding-token"] !== this.token) return send(res, 403, { error: "bad token" });
 
@@ -120,6 +154,20 @@ export class Dashboard {
       return this.redo(res, id, body);
     }
     return send(res, 404, { error: "not found" });
+  }
+
+  /** Built files only: names are checked above, so nothing outside dist/web/assets can be read. */
+  private serveAsset(res: http.ServerResponse, name: string) {
+    const type = CONTENT_TYPES[path.extname(name)];
+    const file = path.join(this.webDir, "assets", name);
+    if (!type || !fs.existsSync(file)) return send(res, 404, { error: "not found" });
+    res.writeHead(200, {
+      "Content-Type": type,
+      // Vite puts a content hash in every file name.
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+    });
+    fs.createReadStream(file).pipe(res);
   }
 
   private snapshot() {

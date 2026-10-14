@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scan } from "../src/scan.js";
 import { ManualSender } from "../src/send.js";
@@ -10,10 +12,19 @@ import { knowledgeDir, scanDeps } from "./helpers.js";
 let server: Server | undefined;
 afterEach(() => server?.close());
 
+/** A stand-in for `vite build` output. */
+function webDir(): string {
+  const dir = knowledgeDir({ "index.html": '<meta name="pudding-token" content="__PUDDING_TOKEN__">' });
+  fs.mkdirSync(path.join(dir, "assets"));
+  fs.writeFileSync(path.join(dir, "assets", "index-abc123.js"), "console.log('hi')");
+  fs.writeFileSync(path.join(dir, "secret.txt"), "not an asset");
+  return dir;
+}
+
 async function setup(conversations = [fixtures.clean()]) {
   const ctx = scanDeps(conversations);
   await scan(ctx.deps);
-  const dashboard = new Dashboard({ ...ctx.deps, sender: new ManualSender(false, knowledgeDir()) });
+  const dashboard = new Dashboard({ ...ctx.deps, sender: new ManualSender(false, knowledgeDir()) }, webDir());
   server = dashboard.createServer();
   await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -30,8 +41,21 @@ async function setup(conversations = [fixtures.clean()]) {
 describe("dashboard API", () => {
   it("serves the page with the session token", async () => {
     const { call, dashboard } = await setup();
-    const html = await (await call("/")).text();
-    expect(html).toContain(`const TOKEN = "${dashboard.token}"`);
+    const res = await call("/");
+    expect(await res.text()).toContain(`<meta name="pudding-token" content="${dashboard.token}">`);
+    expect(res.headers.get("content-security-policy")).toContain("script-src 'self'");
+  });
+
+  it("serves built assets, and nothing outside the assets folder", async () => {
+    const { call } = await setup();
+    const js = await call("/assets/index-abc123.js");
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(await js.text()).toBe("console.log('hi')");
+    expect((await call("/assets/missing-1.js")).status).toBe(404);
+    expect((await call("/assets/..%2Fsecret.txt")).status).toBe(404);
+    expect((await call("/assets/../secret.txt")).status).toBe(404);
+    expect((await call("/secret.txt")).status).toBe(404);
   });
 
   it("rejects API calls without the token", async () => {

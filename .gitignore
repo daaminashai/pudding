@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .env
 
 # Drafts, learned examples and inspected conversations contain email content.

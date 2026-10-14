@@ -65,7 +65,7 @@ because Jelly adds each sender's own when the reply goes out.
 npm start
 ```
 
-This opens the dashboard at http://localhost:4545 and checks the inbox straight away. Click **Check inbox** to look
+This builds the dashboard, opens it at http://localhost:4545 and checks the inbox straight away. Click **Check inbox** to look
 again later. Stop it with Ctrl-C.
 
 Each draft card shows the latest message (expand for the whole thread, including internal notes), the drafted reply in
@@ -83,7 +83,7 @@ an editable box, and badges for what to look at:
 
 - **Approve & copy** checks the conversation hasn't changed since the draft was written, saves your final text and
   copies it. If a newer message arrived or someone already replied, it refuses and marks the draft out of date.
-- **Redo…** redrafts, optionally with instructions ("shorter", "mention the deadline", "say no politely").
+- **Rewrite** redrafts, optionally with instructions ("shorter", "mention the deadline", "say no politely").
 - **Discard** drops the draft. That email won't be drafted again unless the sender writes back.
 
 Drafts persist in `data/state.db`, so you can stop and come back. Pudding also remembers when it last checked each
@@ -182,9 +182,13 @@ it contains your login.
 ## Development
 
 ```bash
-npm test          # vitest; Marmalade and the model APIs are mocked
-npm run typecheck
+npm test                   # vitest; Marmalade and the model APIs are mocked
+npm run typecheck          # server and dashboard
+npm run build -- --watch   # rebuild the dashboard on save while `npm start` runs; reload the page to see changes
 ```
+
+The dashboard is React with Tailwind and Radix UI components (shadcn/ui style) in `web/`. `npm start` builds it into
+`dist/web` with Vite first, and the server serves that build.
 
 | Path | |
 |---|---|
@@ -195,7 +199,8 @@ npm run typecheck
 | `src/knowledge.ts` | docs, style, learning from past conversations |
 | `src/guardrails.ts` | skip checks and flags |
 | `src/grounding.ts`, `src/humanize.ts` | invented-fact and AI-style checks |
-| `src/server.ts`, `src/dashboard.html` | the dashboard |
+| `src/server.ts` | the dashboard's local server and API |
+| `web/` | the dashboard UI (React, Tailwind, Radix UI) |
 | `src/send.ts`, `src/jelly.ts` | sending: copy-and-paste mode, or through Jelly with your session |
 | `src/capture.ts` | `npm run capture`: summarizes a DevTools request with secrets hidden; saves the login cookie |
 | `src/marmalade.ts`, `src/metadata.ts` | read-only Marmalade client; sender and header parsing |
