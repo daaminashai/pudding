@@ -1,8 +1,11 @@
+import path from "node:path";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LlmError } from "../src/llm.js";
 import { scan } from "../src/scan.js";
+import { State } from "../src/state.js";
 import { conversation, fixtures, withMessage } from "./fixtures.js";
-import { MAILBOX, scanDeps } from "./helpers.js";
+import { knowledgeDir, MAILBOX, scanDeps } from "./helpers.js";
 
 describe("scan", () => {
   it("drafts every unanswered email and skips automated mail", async () => {
@@ -78,6 +81,84 @@ describe("scan", () => {
     expect(drafter.calls).toHaveLength(0);
     // Learning lists conversations by startDate; without it there's no such call.
     expect(marmalade.requests.some((r) => r.url.searchParams.has("startDate"))).toBe(false);
+  });
+
+  it("gives replies that only confirm a sign-up the fixed reply, without loading the docs", async () => {
+    const food = conversation({ id: "cnv_food", subject: "Re: Bela: Haven + Framework 12", messages: [{ text: "Pizza 🍕" }] });
+    const { deps, state, drafter } = scanDeps([food]);
+    const { knowledge, progress } = await scan(deps);
+
+    expect(progress.drafted).toBe(1);
+    expect(knowledge).toBeNull();
+    expect(drafter.calls).toHaveLength(0);
+    expect(drafter.confirmationChecks).toEqual([{ subject: "Re: Bela: Haven + Framework 12", question: "Pizza 🍕" }]);
+    expect(state.pendingDrafts("reply")).toEqual([]);
+    expect(state.pendingDrafts("confirmation")).toEqual([
+      expect.objectContaining({
+        kind: "confirmation",
+        draft: "Thanks! Your registration has been confirmed.\n\ncheers,\nthe team",
+        confidence: 1,
+        needsHuman: false,
+        note: "Just their favorite food.",
+      }),
+    ]);
+  });
+
+  it("writes a full draft when a confirmation reply also asks something", async () => {
+    const food = conversation({ subject: "Re: Uday: Haven Sign Up Confirmation", messages: [{ text: "pizza! where is it?" }] });
+    const { deps, state, drafter } = scanDeps([food]);
+    await scan(deps);
+    expect(drafter.confirmationChecks).toHaveLength(1);
+    expect(drafter.calls).toHaveLength(1);
+    expect(state.pendingDrafts("confirmation")).toEqual([]);
+    expect(state.pendingDrafts("reply")).toHaveLength(1);
+  });
+
+  it("only checks unanswered replies to the confirmation email", async () => {
+    const answered = conversation({
+      subject: "Re: Zack: Haven + Framework 12",
+      messages: [
+        { text: "tacos", minutesAgo: 30 },
+        { inbound: false, from: "team@ours.example", text: "confirmed!", minutesAgo: 20 },
+        { text: "so my friend can use my link?", minutesAgo: 10 },
+      ],
+    });
+    const { deps, drafter } = scanDeps([answered, fixtures.clean()]);
+    await scan(deps);
+    expect(drafter.confirmationChecks).toEqual([]);
+    expect(drafter.calls).toHaveLength(2);
+  });
+
+  it("moves confirmations already waiting in the queue, checking each draft once", async () => {
+    const file = path.join(knowledgeDir(), "state.db");
+    const food = conversation({ id: "cnv_food", subject: "Re: Bela: Haven + Framework 12", messages: [{ text: "Momos" }] });
+    const question = conversation({ id: "cnv_q", subject: "Re: Uday: Haven + Framework 12", messages: [{ text: "where?" }] });
+    const { deps, drafter } = scanDeps([food, question, fixtures.clean()]);
+    // Drafted before confirmations existed: everything is a normal reply, never checked.
+    drafter.respondToConfirmation = () => ({ onlyConfirmation: false, reason: "" });
+    const state = new State(file);
+    await scan({ ...deps, state });
+    expect(state.pendingDrafts("reply")).toHaveLength(3);
+    state.close();
+    const raw = new Database(file);
+    raw.prepare("UPDATE drafts SET confirmation_checked = 0").run();
+    raw.close();
+
+    drafter.respondToConfirmation = (q) => ({ onlyConfirmation: q === "Momos", reason: "Just a food." });
+    drafter.confirmationChecks.length = 0;
+    const reopened = new State(file);
+    await scan({ ...deps, state: reopened });
+    expect(reopened.pendingDrafts("confirmation")).toEqual([
+      expect.objectContaining({ conversationId: "cnv_food", draft: "Thanks! Your registration has been confirmed.\n\ncheers,\nthe team" }),
+    ]);
+    expect(reopened.pendingDrafts("reply").map((d) => d.conversationId).sort()).toEqual(["cnv_clean", "cnv_q"]);
+    // Only the two that look like confirmation replies needed the model.
+    expect(drafter.confirmationChecks.map((c) => c.question).sort()).toEqual(["Momos", "where?"]);
+
+    drafter.confirmationChecks.length = 0;
+    await scan({ ...deps, state: reopened });
+    expect(drafter.confirmationChecks).toEqual([]);
+    reopened.close();
   });
 
   it("replaces a pending draft when a newer message arrives", async () => {

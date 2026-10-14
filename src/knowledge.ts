@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { ConfigError } from "./config.js";
+import { DEFAULT_CONFIRMATION_REPLY } from "./confirmations.js";
 import { checkHeaders, checkSender } from "./guardrails.js";
 import { log } from "./log.js";
 import type { ConversationDetail, MarmaladeClient } from "./marmalade.js";
@@ -30,6 +31,8 @@ export interface Style {
   /** Appended after every reply, if set. Otherwise the drafter signs off like past replies do. */
   signOff: string | null;
   notes: string;
+  /** The reply to sign-up confirmations that only share a favorite food. */
+  confirmationReply: string;
 }
 
 export interface Knowledge {
@@ -61,14 +64,19 @@ export function loadDocs(dir: string): KnowledgeDoc[] {
 
 export function loadStyle(dir: string): Style {
   const file = path.join(dir, "_style.md");
-  if (!fs.existsSync(file)) return { signOff: null, notes: "" };
+  const confirmationReply = DEFAULT_CONFIRMATION_REPLY;
+  if (!fs.existsSync(file)) return { signOff: null, notes: "", confirmationReply };
   const raw = fs.readFileSync(file, "utf8");
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-  if (!match) return { signOff: null, notes: stripComments(raw) };
+  if (!match) return { signOff: null, notes: stripComments(raw), confirmationReply };
   const data = YAML.parse(match[1] ?? "") ?? {};
   if (typeof data !== "object" || Array.isArray(data)) throw new ConfigError(`${file}: frontmatter must be a mapping`);
-  const signOff = typeof data.sign_off === "string" && data.sign_off.trim() ? data.sign_off.trim() : null;
-  return { signOff, notes: stripComments(match[2] ?? "") };
+  const text = (key: string) => (typeof data[key] === "string" && data[key].trim() ? (data[key].trim() as string) : null);
+  return {
+    signOff: text("sign_off"),
+    notes: stripComments(match[2] ?? ""),
+    confirmationReply: text("confirmation_reply") ?? confirmationReply,
+  };
 }
 
 /** Each run of inbound messages followed by one of our replies becomes an example. */

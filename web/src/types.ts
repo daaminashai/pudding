@@ -14,9 +14,11 @@ export interface ThreadEntry {
 }
 
 export type DraftStatus = "pending" | "approved" | "sent" | "discarded" | "stale";
+export type DraftKind = "reply" | "confirmation";
 
 export interface Draft {
   id: number;
+  kind: DraftKind;
   conversationId: string;
   messageId: string;
   subject: string;
@@ -57,12 +59,27 @@ export interface ScanProgress {
   errors: string[];
 }
 
+export interface BulkStatus {
+  running: boolean;
+  total: number;
+  processed: number;
+  sent: number;
+  failed: Array<{ id: number; subject: string; error: string }>;
+  stoppedReason: string | null;
+  current: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface Snapshot {
   drafts: Draft[];
+  confirmations: Draft[];
   done: Draft[];
   skipped: Skipped[];
   scan: { running: boolean; progress: ScanProgress | null; error: string | null; finishedAt: string | null };
   sending: { reasonUnavailable: string | null };
+  bulk: BulkStatus | null;
+  bulkGapSeconds: number;
 }
 
 export interface ApproveResult {

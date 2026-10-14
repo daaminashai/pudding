@@ -2,6 +2,7 @@ import { CircleAlert, Inbox, LoaderCircle, RefreshCw, TriangleAlert } from "luci
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { api } from "@/api";
+import { ConfirmationsPanel } from "@/components/ConfirmationsPanel";
 import { DecidedCard } from "@/components/DecidedCard";
 import { DoneList } from "@/components/DoneList";
 import { DraftCard } from "@/components/DraftCard";
@@ -45,13 +46,14 @@ export function App() {
   }, []);
 
   const running = snap?.scan.running ?? false;
+  const busy = running || (snap?.bulk?.running ?? false);
   useEffect(() => {
     void refresh();
   }, [refresh]);
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), running ? 2000 : 30_000);
+    const timer = setInterval(() => void refresh(), busy ? 1500 : 30_000);
     return () => clearInterval(timer);
-  }, [refresh, running]);
+  }, [refresh, busy]);
 
   const review = useMemo(() => {
     const pending = (snap?.drafts ?? []).filter((d) => !decided.has(d.id)).map((d) => ({ draft: d, decided: null }));
@@ -153,6 +155,11 @@ export function App() {
                     To review <Count n={pending} />
                   </TabsTrigger>
                 </Hint>
+                <Hint label="Replies to the sign-up confirmation email that only share a favorite food. Check them over and send them all at once.">
+                  <TabsTrigger value="confirmations">
+                    Confirmations <Count n={snap.confirmations.length} />
+                  </TabsTrigger>
+                </Hint>
                 <Hint label="Replies you sent, approved or discarded, and drafts that went out of date.">
                   <TabsTrigger value="done">Done</TabsTrigger>
                 </Hint>
@@ -201,6 +208,15 @@ export function App() {
                     ),
                   )
                 )}
+              </TabsContent>
+              <TabsContent value="confirmations">
+                <ConfirmationsPanel
+                  confirmations={snap.confirmations}
+                  bulk={snap.bulk}
+                  gapSeconds={snap.bulkGapSeconds}
+                  sendingUnavailable={snap.sending.reasonUnavailable}
+                  onChanged={() => void refresh()}
+                />
               </TabsContent>
               <TabsContent value="done">
                 <DoneList drafts={snap.done} />

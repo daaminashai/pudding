@@ -10,13 +10,18 @@ import {
   type Flag,
 } from "./guardrails.js";
 import { findAiTells } from "./humanize.js";
+import {
+  isConfirmationCandidate,
+  type ConfirmationCheck,
+  type ConfirmationInput,
+} from "./confirmations.js";
 import { learnFromPastConversations, loadDocs, loadStyle, type Knowledge, type Style } from "./knowledge.js";
 import { LlmError, type Drafter } from "./llm.js";
 import { log } from "./log.js";
 import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from "./marmalade.js";
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
-import type { State } from "./state.js";
+import type { DraftContent, DraftKind, State } from "./state.js";
 import { latestMessage, messageText, stripQuoted, toThread, type Thread } from "./thread.js";
 
 export interface ScanDeps {
@@ -138,6 +143,9 @@ export async function scan(
     onProgress({ ...progress, errors: [...progress.errors] });
   };
   report({});
+  // A fatal model error (no credits, bad key) stops the scan here: nothing else would work either.
+  await sortOldConfirmations(deps, (message) => report({ message }));
+  report({ message: "Looking for new emails…" });
 
   // startDate filters on when a conversation was created, which would miss new
   // replies in old threads, so list every open conversation and filter here.
@@ -270,8 +278,29 @@ async function handleConversation(
   ].filter((f): f is Flag => f !== null);
 
   const thread = toThread(conversation);
+  const insert = (c: DraftContent & { kind?: DraftKind }): Outcome => {
+    state.insertDraft({
+      conversationId: conversation.id,
+      messageId: latest.id,
+      subject,
+      sender: sender.from,
+      senderName: sender.name,
+      conversationUrl: conversation.url ?? jellyUrl(config.jellyConversationUrl, conversation.id),
+      receivedAt: latest.sentAt ?? latest.createdAt,
+      thread: thread.entries,
+      question,
+      ...c,
+    });
+    return "drafted";
+  };
+
+  let content: DraftContent;
+  const confirmation = force ? null : await checkConfirmation(drafter, { subject, thread: thread.entries, question });
+  if (confirmation?.onlyConfirmation) {
+    return insert({ kind: "confirmation", ...confirmationContent(loadStyle(config.knowledgeDir), confirmation.reason, flags) });
+  }
+
   const knowledge = await getKnowledge();
-  let content;
   try {
     const result = await drafter.draft({ thread, knowledge, senderName: sender.name, forceReply: force });
     if (!result.replyNeeded) return skip(`no reply needed: ${result.note || "the drafter judged it doesn't need one"}`);
@@ -295,19 +324,66 @@ async function handleConversation(
     };
   }
 
-  state.insertDraft({
-    conversationId: conversation.id,
-    messageId: latest.id,
-    subject,
-    sender: sender.from,
-    senderName: sender.name,
-    conversationUrl: conversation.url ?? jellyUrl(config.jellyConversationUrl, conversation.id),
-    receivedAt: latest.sentAt ?? latest.createdAt,
-    thread: thread.entries,
-    question,
-    ...content,
+  return insert(content);
+}
+
+/**
+ * For a reply to the sign-up confirmation email, asks the model (a small call,
+ * without the docs) whether it only confirms. Null when it isn't one, or when
+ * the check failed in a way that a normal draft can cover.
+ */
+export async function checkConfirmation(drafter: Drafter, input: ConfirmationInput): Promise<ConfirmationCheck | null> {
+  if (!isConfirmationCandidate(input)) return null;
+  try {
+    return await drafter.checkConfirmation(input.subject, input.question);
+  } catch (err) {
+    if (err instanceof LlmError && (err.transient || err.fatal)) throw err;
+    log.warn("couldn't check a confirmation reply; drafting it normally", { error: errorMessage(err) });
+    return null;
+  }
+}
+
+export function confirmationContent(style: Style, reason: string, flags: Flag[]): DraftContent {
+  return {
+    draft: withSignOff(style.confirmationReply, style),
+    confidence: 1,
+    needsHuman: false,
+    note: reason,
+    flags: flags.filter((f) => !CONTENT_FLAG_KINDS.has(f.kind)),
+  };
+}
+
+/**
+ * Drafts written before confirmations were told apart: moves the ones that only
+ * confirm a sign-up to the Confirmations tab, once each.
+ */
+async function sortOldConfirmations(deps: ScanDeps, report: (message: string) => void): Promise<void> {
+  const { state, drafter, config } = deps;
+  const unchecked = state.uncheckedPendingReplies();
+  if (unchecked.length === 0) return;
+  report(`Looking for sign-up confirmations among ${unchecked.length} waiting drafts…`);
+  const style = loadStyle(config.knowledgeDir);
+  let moved = 0;
+  let fatal: LlmError | null = null;
+  await pool(unchecked, CONCURRENCY, async (draft) => {
+    if (fatal) return;
+    try {
+      const input = { subject: draft.subject, thread: draft.thread, question: draft.question };
+      const check = await checkConfirmation(drafter, input);
+      if (check?.onlyConfirmation) {
+        state.updateDraft(draft.id, confirmationContent(style, check.reason, draft.flags));
+        state.setKind(draft.id, "confirmation");
+        moved++;
+      }
+      state.markConfirmationChecked(draft.id);
+    } catch (err) {
+      // Left unchecked, so it's tried again next scan.
+      if (err instanceof LlmError && err.fatal) fatal ??= err;
+      else log.warn("couldn't check a waiting draft for a confirmation", { draftId: draft.id, error: errorMessage(err) });
+    }
   });
-  return "drafted";
+  if (moved > 0) log.info(`moved ${moved} sign-up confirmation(s) to the Confirmations tab`);
+  if (fatal) throw fatal;
 }
 
 /** Marmalade doesn't always include a link, so build one from JELLY_CONVERSATION_URL (with {id}). */

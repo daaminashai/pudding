@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
+import type { z } from "zod";
+import { ConfirmationCheckSchema, type RawConfirmationCheck } from "./confirmations.js";
 import { LlmError, OutputSchema, PromptDrafter, type PromptParts, type RawDraft } from "./llm.js";
 
 /** Same prompt and rewrite pass as the Anthropic drafter, via the OpenAI Responses API. */
@@ -15,17 +17,32 @@ export class OpenAIDrafter extends PromptDrafter {
     this.client = client ?? new OpenAI({ maxRetries: 6 });
   }
 
-  protected async complete(parts: PromptParts): Promise<RawDraft> {
+  protected complete(parts: PromptParts): Promise<RawDraft> {
+    // Instructions and knowledge are identical across a run; OpenAI caches the shared prefix automatically.
+    return this.parse(OutputSchema, "email_draft", `${parts.instructions}\n\n${parts.knowledge}`, parts.user, 16_000, "pudding-drafts");
+  }
+
+  protected classify(parts: { instructions: string; user: string }): Promise<RawConfirmationCheck> {
+    return this.parse(ConfirmationCheckSchema, "confirmation_check", parts.instructions, parts.user, 4_000, "pudding-confirmations");
+  }
+
+  private async parse<S extends z.ZodType>(
+    schema: S,
+    name: string,
+    instructions: string,
+    input: string,
+    maxOutputTokens: number,
+    cacheKey: string,
+  ): Promise<z.infer<S>> {
     let response;
     try {
       response = await this.client.responses.parse({
         model: this.model,
-        // Instructions and knowledge are identical across a run; OpenAI caches the shared prefix automatically.
-        instructions: `${parts.instructions}\n\n${parts.knowledge}`,
-        input: parts.user,
-        text: { format: zodTextFormat(OutputSchema, "email_draft") },
-        prompt_cache_key: "pudding-drafts",
-        max_output_tokens: 16_000,
+        instructions,
+        input,
+        text: { format: zodTextFormat(schema, name) },
+        prompt_cache_key: cacheKey,
+        max_output_tokens: maxOutputTokens,
         store: false,
       });
     } catch (err) {
@@ -39,7 +56,7 @@ export class OpenAIDrafter extends PromptDrafter {
       throw new LlmError(`model output was cut off (${response.incomplete_details?.reason ?? "unknown"})`, false);
     }
     if (!response.output_parsed) throw new LlmError("model output did not match the schema", false);
-    return response.output_parsed;
+    return response.output_parsed as z.infer<S>;
   }
 }
 

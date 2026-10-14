@@ -43,7 +43,7 @@ async function main(): Promise<number> {
     }
   }
 
-  const dashboard = new Dashboard(deps);
+  const dashboard = new Dashboard(deps, { bulkGapMs: config.bulkSendGapSeconds * 1000 });
   const server = dashboard.createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

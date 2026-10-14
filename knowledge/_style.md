@@ -4,6 +4,8 @@
 # sign_off: |
 #   cheers,
 #   your name
+# The reply to sign-up confirmations that only share a favorite food (the Confirmations tab).
+# confirmation_reply: "Thanks! Your registration has been confirmed."
 ---
 <!--
 Optional notes on how replies should sound, in plain words. The drafter

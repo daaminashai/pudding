@@ -7,6 +7,9 @@ import { stripQuoted, type ThreadEntry } from "./thread.js";
 
 export type DraftStatus = "pending" | "approved" | "sent" | "discarded" | "stale";
 
+/** "confirmation": a reply to the sign-up confirmation email that only shares a food; gets the fixed reply. */
+export type DraftKind = "reply" | "confirmation";
+
 export interface DraftContent {
   draft: string;
   confidence: number;
@@ -26,10 +29,12 @@ export interface NewDraft extends DraftContent {
   thread: ThreadEntry[];
   /** The latest inbound message's text; becomes the "question" half of a learned example. */
   question: string;
+  kind?: DraftKind;
 }
 
 export interface Draft extends NewDraft {
   id: number;
+  kind: DraftKind;
   originalDraft: string;
   status: DraftStatus;
   statusReason: string;
@@ -71,6 +76,7 @@ interface DraftDbRow {
   created_at: string;
   updated_at: string;
   decided_at: string | null;
+  kind: DraftKind;
 }
 
 export class State {
@@ -129,6 +135,14 @@ export class State {
         examples_json TEXT NOT NULL
       );
     `);
+    this.addColumn("drafts", "kind", "TEXT NOT NULL DEFAULT 'reply'");
+    // 0 for drafts written before confirmations existed, until a scan has checked them.
+    this.addColumn("drafts", "confirmation_checked", "INTEGER NOT NULL DEFAULT 0");
+  }
+
+  private addColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   /** True if this inbound message already has a draft or was skipped. */
@@ -162,8 +176,8 @@ export class State {
       .prepare(
         `INSERT INTO drafts (conversation_id, message_id, subject, sender, sender_name, conversation_url, received_at,
            thread_json, question, draft, original_draft, confidence, needs_human, note, flags_json, status,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+           created_at, updated_at, kind, confirmation_checked)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1)`,
       )
       .run(
         d.conversationId,
@@ -183,6 +197,7 @@ export class State {
         JSON.stringify(d.flags),
         at,
         at,
+        d.kind ?? "reply",
       );
     return Number(result.lastInsertRowid);
   }
@@ -212,10 +227,30 @@ export class State {
     return row ? toDraft(row) : undefined;
   }
 
-  pendingDrafts(): Draft[] {
+  pendingDrafts(kind?: DraftKind): Draft[] {
+    const rows = kind
+      ? this.db.prepare("SELECT * FROM drafts WHERE status = 'pending' AND kind = ? ORDER BY received_at ASC").all(kind)
+      : this.db.prepare("SELECT * FROM drafts WHERE status = 'pending' ORDER BY received_at ASC").all();
+    return (rows as DraftDbRow[]).map(toDraft);
+  }
+
+  /** Pending drafts written before confirmations were told apart, still to be checked once. */
+  uncheckedPendingReplies(): Draft[] {
     return (
-      this.db.prepare("SELECT * FROM drafts WHERE status = 'pending' ORDER BY received_at ASC").all() as DraftDbRow[]
+      this.db
+        .prepare("SELECT * FROM drafts WHERE status = 'pending' AND kind = 'reply' AND confirmation_checked = 0")
+        .all() as DraftDbRow[]
     ).map(toDraft);
+  }
+
+  markConfirmationChecked(id: number): void {
+    this.db.prepare("UPDATE drafts SET confirmation_checked = 1 WHERE id = ?").run(id);
+  }
+
+  setKind(id: number, kind: DraftKind, now = new Date()): void {
+    this.db
+      .prepare("UPDATE drafts SET kind = ?, updated_at = ? WHERE id = ? AND status = 'pending'")
+      .run(kind, now.toISOString(), id);
   }
 
   decidedDrafts(limit = 50): Draft[] {
@@ -262,7 +297,8 @@ export class State {
     const rows = this.db
       .prepare(
         `SELECT subject, question, final_text, decided_at FROM drafts
-         WHERE status IN ('approved', 'sent') AND final_text IS NOT NULL ORDER BY decided_at DESC LIMIT ?`,
+         WHERE status IN ('approved', 'sent') AND final_text IS NOT NULL AND kind = 'reply'
+         ORDER BY decided_at DESC LIMIT ?`,
       )
       .all(limit) as Array<{ subject: string; question: string; final_text: string; decided_at: string }>;
     return rows.map((r) => ({
@@ -339,5 +375,6 @@ function toDraft(r: DraftDbRow): Draft {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     decidedAt: r.decided_at,
+    kind: r.kind,
   };
 }

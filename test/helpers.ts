@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ConfirmationCheck } from "../src/confirmations.js";
 import type { DraftRequest, DraftResult, Drafter } from "../src/llm.js";
 import { MarmaladeClient, type Assignment, type ConversationDetail } from "../src/marmalade.js";
 import type { ScanDeps } from "../src/scan.js";
@@ -56,6 +57,12 @@ export function fakeMarmalade(conversations: ConversationDetail[]) {
 
 export class FakeDrafter implements Drafter {
   calls: DraftRequest[] = [];
+  confirmationChecks: Array<{ subject: string; question: string }> = [];
+  /** By default anything that's just a food word or two confirms; tests override it. */
+  respondToConfirmation: (question: string) => ConfirmationCheck | Error = (question) =>
+    question.includes("?")
+      ? { onlyConfirmation: false, reason: "Also asks a question." }
+      : { onlyConfirmation: true, reason: "Just their favorite food." };
   constructor(
     public respond: (req: DraftRequest) => DraftResult | Error = () => ({
       replyNeeded: true,
@@ -65,6 +72,13 @@ export class FakeDrafter implements Drafter {
       note: "",
     }),
   ) {}
+
+  async checkConfirmation(subject: string, question: string): Promise<ConfirmationCheck> {
+    this.confirmationChecks.push({ subject, question });
+    const result = this.respondToConfirmation(question);
+    if (result instanceof Error) throw result;
+    return result;
+  }
 
   async draft(req: DraftRequest): Promise<DraftResult> {
     this.calls.push(req);

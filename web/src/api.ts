@@ -20,6 +20,9 @@ export const api = {
   discard: (id: number) => call<{ status: string }>(`/api/drafts/${id}/discard`, {}),
   rewrite: (id: number, text: string, instructions: string) =>
     call<Draft>(`/api/drafts/${id}/redo`, { text, instructions }),
+  fullReply: (id: number) => call<Draft>(`/api/drafts/${id}/full`, {}),
+  sendConfirmations: (ids: number[]) => call<Snapshot>("/api/confirmations/send", { ids }),
+  stopConfirmations: () => call<Snapshot>("/api/confirmations/stop", {}),
   draftAnyway: (messageId: string) =>
     call<{ outcome: string }>(`/api/skipped/${encodeURIComponent(messageId)}/draft`, {}),
 };

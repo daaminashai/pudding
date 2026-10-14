@@ -97,6 +97,24 @@ on the next check.
 
 `npm run scan` does the same check without the dashboard, for queueing drafts ahead of time.
 
+### Sign-up confirmations
+
+The sign-up confirmation email asks people to reply with their favorite food. Unanswered replies to it (subjects like
+"Re: Bela: Haven + Framework 12" or "Re: Zahra: Haven Sign Up Confirmation", or any reply quoting "To confirm your
+registration, reply to this email with your favorite food") get a quick, separate check by the model, without the docs
+or past replies, so it costs very little. If the reply only shares a food (plus thanks, a greeting or a signature),
+it goes to the **Confirmations** tab with the reply "Thanks! Your registration has been confirmed." To change that
+text, set `confirmation_reply` in `knowledge/_style.md`. Anything more (a question, a cancellation, a friend who wants
+to come, dietary needs) gets a normal draft under **To review** instead.
+
+In the Confirmations tab, tick the ones to send (everything without a badge is ticked to start) and click **Send**.
+They go out one at a time, `BULK_SEND_GAP_SECONDS` apart (3 by default), so Jelly doesn't rate-limit us, and each
+conversation is archived like a normal send. Each one gets the same checks as the Approve button. A conversation that
+changed is skipped; a Jelly login problem, a rate limit, an unclear send or a kill switch stops the run, and **Stop**
+does too. **Full reply** moves one to To review with a normal draft.
+
+Drafts already waiting when you upgrade are checked once on the next scan, and confirmations among them move over.
+
 ### What gets skipped
 
 These get no draft and are listed under the Skipped tab, each with a **Draft anyway** button in case it got one
@@ -200,10 +218,11 @@ The dashboard is React with Tailwind and Radix UI components (shadcn/ui style) i
 | `src/llm-openai.ts` | the same, via the OpenAI Responses API |
 | `src/knowledge.ts` | docs, style, learning from past conversations |
 | `src/guardrails.ts` | skip checks and flags |
+| `src/confirmations.ts` | spotting replies to the sign-up confirmation email |
 | `src/grounding.ts`, `src/humanize.ts` | invented-fact and AI-style checks |
 | `src/server.ts` | the dashboard's local server and API |
 | `web/` | the dashboard UI (React, Tailwind, Radix UI) |
 | `src/send.ts`, `src/jelly.ts` | sending: copy-and-paste mode, or through Jelly with your session |
 | `src/capture.ts` | `npm run capture`: summarizes a DevTools request with secrets hidden; saves the login cookie |
 | `src/marmalade.ts`, `src/metadata.ts` | read-only Marmalade client; sender and header parsing |
-| `src/state.ts` | SQLite: drafts, skipped emails, learned examples |
+| `src/state.ts` | SQLite: drafts, skipped emails, learned examples, when each conversation was checked |

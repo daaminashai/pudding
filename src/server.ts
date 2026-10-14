@@ -23,12 +23,32 @@ import {
 } from "./scan.js";
 import { JellySendError, JellySessionError } from "./jelly.js";
 import { ConversationChangedError, DraftOpenError, type Sender } from "./send.js";
-import type { Draft } from "./state.js";
+import type { Draft, DraftKind } from "./state.js";
 import { latestMessage } from "./thread.js";
 
 export interface DashboardDeps extends ScanDeps {
   sender: Sender;
 }
+
+type ApproveOutcome =
+  | { ok: true; status: "sent" | "approved"; text: string; url: string | null; warning: string | null }
+  /** stopBatch: a bulk run should stop rather than try the next one. */
+  | { ok: false; httpStatus: number; error: string; stopBatch: boolean };
+
+interface BulkStatus {
+  running: boolean;
+  total: number;
+  processed: number;
+  sent: number;
+  failed: Array<{ id: number; subject: string; error: string }>;
+  stoppedReason: string | null;
+  /** The draft being sent right now. */
+  current: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+const MAX_BULK = 500;
 
 interface ScanStatus {
   running: boolean;
@@ -70,10 +90,20 @@ export class Dashboard {
   private names = new Map<string, string>();
   private scanPromise: Promise<void> | null = null;
 
+  private bulk: BulkStatus | null = null;
+  private bulkStop = false;
+  /** Drafts being sent right now. */
+  private readonly inFlight = new Set<number>();
+  private readonly webDir: string;
+  private readonly bulkGapMs: number;
+
   constructor(
     private readonly deps: DashboardDeps,
-    private readonly webDir = WEB_DIR,
-  ) {}
+    options: { webDir?: string; bulkGapMs?: number } = {},
+  ) {
+    this.webDir = options.webDir ?? WEB_DIR;
+    this.bulkGapMs = options.bulkGapMs ?? 3_000;
+  }
 
   /** Starts a scan unless one is already running. Resolves when it finishes. */
   startScan(): Promise<void> {
@@ -147,15 +177,23 @@ export class Dashboard {
       return send(res, 202, this.snapshot());
     }
 
+    if (req.method === "POST" && url.pathname === "/api/confirmations/send") return this.startBulk(res, await readJson(req));
+    if (req.method === "POST" && url.pathname === "/api/confirmations/stop") {
+      this.bulkStop = true;
+      return send(res, 200, this.snapshot());
+    }
+
     const skippedMatch = /^\/api\/skipped\/([^/]+)\/draft$/.exec(url.pathname);
     if (req.method === "POST" && skippedMatch) return this.draftAnyway(res, decodeURIComponent(skippedMatch[1]!));
 
-    const match = /^\/api\/drafts\/(\d+)\/(approve|discard|redo)$/.exec(url.pathname);
+    const match = /^\/api\/drafts\/(\d+)\/(approve|discard|redo|full)$/.exec(url.pathname);
     if (req.method === "POST" && match) {
       const id = Number(match[1]);
       const body = await readJson(req);
       if (match[2] === "approve") return this.approve(res, id, body);
       if (match[2] === "discard") return this.discard(res, id);
+      // "full": a confirmation that needs a real answer after all.
+      if (match[2] === "full") return this.redo(res, id, {}, "reply");
       return this.redo(res, id, body);
     }
     return send(res, 404, { error: "not found" });
@@ -186,73 +224,190 @@ export class Dashboard {
       ),
     });
     return {
-      drafts: state.pendingDrafts().map(withLink),
+      drafts: state.pendingDrafts("reply").map(withLink),
+      confirmations: state.pendingDrafts("confirmation").map(withLink),
       done: state.decidedDrafts(50).map(withLink),
       skipped: state.recentSkipped(50),
       scan: this.scanStatus,
       sending: { reasonUnavailable: sender.unavailableReason() },
+      bulk: this.bulk,
+      bulkGapSeconds: this.bulkGapMs / 1000,
     };
   }
 
   private async approve(res: http.ServerResponse, id: number, body: Record<string, unknown>) {
-    const { state, marmalade, config, sender } = this.deps;
-    const draft = state.getDraft(id);
+    const draft = this.deps.state.getDraft(id);
     if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) return send(res, 400, { error: "the reply is empty" });
+    const outcome = await this.approveDraft(draft, text);
+    if (!outcome.ok) return send(res, outcome.httpStatus, { error: outcome.error });
+    const { ok: _ok, ...result } = outcome;
+    return send(res, 200, result);
+  }
 
-    // The mirror lags, so this catches most but not all races; the Jelly send
-    // flow will re-check against Jelly itself before sending.
-    let warning: string | null = null;
+  /**
+   * Checks the conversation hasn't moved on, then sends (or, when sending is
+   * off, records) the reply. Shared by the Approve button and bulk sending.
+   */
+  private async approveDraft(draft: Draft, text: string): Promise<ApproveOutcome> {
+    const { state, marmalade, config, sender } = this.deps;
+    const id = draft.id;
+    // A double click, or the same draft in a bulk run and approved by hand: only one may send.
+    if (this.inFlight.has(id)) return { ok: false, httpStatus: 409, error: "This reply is already being sent.", stopBatch: false };
+    this.inFlight.add(id);
     try {
-      const conversation = await marmalade.getConversation(config.mailboxId, draft.conversationId);
-      const latest = latestMessage(conversation);
-      if (latest && latest.id !== draft.messageId) {
-        const reason = latest.isInbound ? "a newer message arrived" : "someone already replied in Jelly";
-        state.setStatus(id, "stale", reason);
-        return send(res, 409, { error: `Not approved: ${reason}. Scan again to get a fresh draft.` });
+      // The mirror lags, so this catches most but not all races; the Jelly send
+      // flow will re-check against Jelly itself before sending.
+      let warning: string | null = null;
+      try {
+        const conversation = await marmalade.getConversation(config.mailboxId, draft.conversationId);
+        const latest = latestMessage(conversation);
+        if (latest && latest.id !== draft.messageId) {
+          const reason = latest.isInbound ? "a newer message arrived" : "someone already replied in Jelly";
+          state.setStatus(id, "stale", reason);
+          return { ok: false, httpStatus: 409, error: `Not approved: ${reason}. Scan again to get a fresh draft.`, stopBatch: false };
+        }
+      } catch (err) {
+        if (sender.unavailableReason() === null) {
+          return {
+            ok: false,
+            httpStatus: 502,
+            error: `Couldn't confirm the conversation is unchanged: ${errorMessage(err)}`,
+            stopBatch: true,
+          };
+        }
+        warning = `Couldn't double-check the conversation first (${errorMessage(err)}); check Jelly before pasting.`;
       }
-    } catch (err) {
-      if (sender.unavailableReason() === null) {
-        return send(res, 502, { error: `Couldn't confirm the conversation is unchanged: ${errorMessage(err)}` });
-      }
-      warning = `Couldn't double-check the conversation first (${errorMessage(err)}); check Jelly before pasting.`;
-    }
 
-    const url = draft.conversationUrl ?? jellyUrl(config.jellyConversationUrl, draft.conversationId);
-    let result;
-    try {
-      result = await sender.send(draft, text);
-    } catch (err) {
-      const message = errorMessage(err);
-      if (err instanceof JellySendError && err.maybeSent) {
-        // Never risk a second copy: treat it as sent and say so loudly.
-        state.setStatus(id, "sent", `may have been sent: ${message}`, text);
-        log.error("send outcome unknown; marked as sent", { draftId: id, error: message });
-        return send(res, 200, {
-          status: "sent",
-          text,
-          url,
-          warning: `It's unclear whether this went out (${message}). Check the conversation in Jelly before doing anything else.`,
-        });
+      const url = draft.conversationUrl ?? jellyUrl(config.jellyConversationUrl, draft.conversationId);
+      let result;
+      try {
+        result = await sender.send(draft, text);
+      } catch (err) {
+        const message = errorMessage(err);
+        if (err instanceof JellySendError && err.maybeSent) {
+          // Never risk a second copy: treat it as sent and say so loudly.
+          state.setStatus(id, "sent", `may have been sent: ${message}`, text);
+          log.error("send outcome unknown; marked as sent", { draftId: id, error: message });
+          return {
+            ok: true,
+            status: "sent",
+            text,
+            url,
+            warning: `It's unclear whether this went out (${message}). Check the conversation in Jelly before doing anything else.`,
+          };
+        }
+        if (err instanceof DraftOpenError) {
+          // Leave the draft in the queue: approve again once the other draft is sent or deleted.
+          return { ok: false, httpStatus: 409, error: `${message}. Approve again once it's sent or deleted.`, stopBatch: false };
+        }
+        if (err instanceof ConversationChangedError) {
+          state.setStatus(id, "stale", message);
+          return { ok: false, httpStatus: 409, error: `${message}. Check inbox again to get a fresh draft.`, stopBatch: false };
+        }
+        if (err instanceof JellySessionError) {
+          return {
+            ok: false,
+            httpStatus: 503,
+            error: `Not sent: the Jelly login stopped working (${message}). Sending is off until it's reconnected; see the README.`,
+            stopBatch: true,
+          };
+        }
+        if (err instanceof JellySendError && err.status === 429) {
+          return {
+            ok: false,
+            httpStatus: 502,
+            error: "Not sent: Jelly is rate-limiting us. Wait a few minutes before sending more.",
+            stopBatch: true,
+          };
+        }
+        return { ok: false, httpStatus: 502, error: message.startsWith("Not sent") ? message : `Not sent: ${message}`, stopBatch: true };
       }
-      if (err instanceof DraftOpenError) {
-        // Leave the draft in the queue: approve again once the other draft is sent or deleted.
-        return send(res, 409, { error: `${message}. Approve again once it's sent or deleted.` });
-      }
-      if (err instanceof ConversationChangedError) {
-        state.setStatus(id, "stale", message);
-        return send(res, 409, { error: `${message}. Check inbox again to get a fresh draft.` });
-      }
-      if (err instanceof JellySessionError) {
-        return send(res, 503, {
-          error: `Not sent: the Jelly login stopped working (${message}). Sending is off until it's reconnected; see the README.`,
-        });
-      }
-      return send(res, 502, { error: message.startsWith("Not sent") ? message : `Not sent: ${message}` });
+      state.setStatus(id, result.sent ? "sent" : "approved", result.message, text);
+      return { ok: true, status: result.sent ? "sent" : "approved", text, warning, url };
+    } finally {
+      this.inFlight.delete(id);
     }
-    state.setStatus(id, result.sent ? "sent" : "approved", result.message, text);
-    return send(res, 200, { status: result.sent ? "sent" : "approved", text, warning, url });
+  }
+
+  /**
+   * Sends the fixed reply to each selected confirmation, one at a time with a
+   * gap between sends so Jelly isn't hammered. Anything that suggests trouble
+   * (login gone, rate limit, an unclear outcome, sending switched off) stops
+   * the run; a conversation that changed is just skipped.
+   */
+  private startBulk(res: http.ServerResponse, body: Record<string, unknown>) {
+    const reason = this.deps.sender.unavailableReason();
+    if (reason) return send(res, 409, { error: `Bulk sending needs sending through Jelly. ${reason}` });
+    if (this.bulk?.running) return send(res, 409, { error: "A bulk send is already running." });
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is number => Number.isInteger(x)) : [];
+    if (ids.length === 0) return send(res, 400, { error: "no confirmations selected" });
+    if (ids.length > MAX_BULK) return send(res, 400, { error: `send at most ${MAX_BULK} at a time` });
+
+    this.bulkStop = false;
+    this.bulk = {
+      running: true,
+      total: ids.length,
+      processed: 0,
+      sent: 0,
+      failed: [],
+      stoppedReason: null,
+      current: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    };
+    void this.runBulk([...new Set(ids)]).catch((err) => {
+      log.error("bulk send failed", { error: errorMessage(err) });
+      if (this.bulk) Object.assign(this.bulk, { running: false, current: null, stoppedReason: errorMessage(err) });
+    });
+    return send(res, 202, this.snapshot());
+  }
+
+  private async runBulk(ids: number[]): Promise<void> {
+    const bulk = this.bulk!;
+    const { state, sender } = this.deps;
+    let lastAttempt = 0;
+    for (const id of ids) {
+      const draft = state.getDraft(id);
+      if (!draft || draft.status !== "pending" || draft.kind !== "confirmation") {
+        bulk.processed++; // sent, discarded or moved since it was selected
+        continue;
+      }
+      const wait = lastAttempt + this.bulkGapMs - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (this.bulkStop) {
+        bulk.stoppedReason = "Stopped. The rest weren't sent.";
+        break;
+      }
+      const blocked = sender.unavailableReason();
+      if (blocked) {
+        bulk.stoppedReason = blocked;
+        break;
+      }
+      bulk.current = id;
+      lastAttempt = Date.now();
+      const outcome = await this.approveDraft(draft, draft.draft);
+      bulk.processed++;
+      if (outcome.ok && outcome.status === "sent") bulk.sent++;
+      if (outcome.ok && outcome.warning) {
+        bulk.stoppedReason = `Stopped after an unclear send: ${outcome.warning}`;
+        break;
+      }
+      if (outcome.ok && outcome.status !== "sent") {
+        bulk.stoppedReason = "Stopped: sending through Jelly switched off.";
+        break;
+      }
+      if (!outcome.ok) {
+        bulk.failed.push({ id, subject: draft.subject, error: outcome.error });
+        if (outcome.stopBatch) {
+          bulk.stoppedReason = `Stopped: ${outcome.error}`;
+          break;
+        }
+      }
+    }
+    Object.assign(bulk, { running: false, current: null, finishedAt: new Date().toISOString() });
+    log.info("bulk send finished", { sent: bulk.sent, failed: bulk.failed.length, stopped: bulk.stoppedReason });
   }
 
   /** "Draft anyway" on a skipped email: forget the skip and draft it, skip checks off. */
@@ -277,14 +432,17 @@ export class Dashboard {
   private discard(res: http.ServerResponse, id: number) {
     const draft = this.deps.state.getDraft(id);
     if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
+    if (this.inFlight.has(id)) return send(res, 409, { error: "This reply is being sent right now." });
     this.deps.state.setStatus(id, "discarded", "discarded in dashboard");
     return send(res, 200, { status: "discarded" });
   }
 
-  private async redo(res: http.ServerResponse, id: number, body: Record<string, unknown>) {
+  /** Rewrites a draft; with `kind`, also moves it (a confirmation that needs a full reply). */
+  private async redo(res: http.ServerResponse, id: number, body: Record<string, unknown>, kind?: DraftKind) {
     const { state, drafter } = this.deps;
     const draft = state.getDraft(id);
     if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
+    if (this.inFlight.has(id)) return send(res, 409, { error: "This reply is being sent right now." });
     const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
     const current = typeof body.text === "string" ? body.text : draft.draft;
 
@@ -295,6 +453,7 @@ export class Dashboard {
       knowledge,
       senderName: draft.senderName,
       revise: instructions ? { previousDraft: current, instructions } : undefined,
+      forceReply: kind === "reply" ? true : undefined,
     });
     const content = {
       draft: withSignOff(result.reply, knowledge.style),
@@ -307,6 +466,7 @@ export class Dashboard {
       ],
     };
     state.updateDraft(id, content);
+    if (kind) state.setKind(id, kind);
     return send(res, 200, state.getDraft(id));
   }
 }

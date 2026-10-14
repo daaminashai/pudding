@@ -7,7 +7,7 @@ import { OpenAIDrafter } from "../src/llm-openai.js";
 const knowledge: Knowledge = {
   docs: [{ name: "faq.md", text: "Applications open March 3." }],
   examples: [],
-  style: { signOff: null, notes: "" },
+  style: { signOff: null, notes: "", confirmationReply: "Thanks! Your registration has been confirmed." },
 };
 const thread = {
   subject: "When?",
@@ -60,6 +60,19 @@ describe("OpenAIDrafter", () => {
     const err = await new OpenAIDrafter("gpt-5.5", client).draft({ thread, knowledge, senderName: null }).catch((e) => e);
     expect(err).toBeInstanceOf(LlmError);
     expect(err.transient).toBe(false);
+  });
+
+  it("checks a confirmation reply without the knowledge prefix", async () => {
+    const { client, calls } = fakeClient([
+      { status: "completed", output: [], output_parsed: { only_confirmation: false, reason: "Asks about the venue." } },
+    ]);
+    const check = await new OpenAIDrafter("gpt-5.5", client).checkConfirmation("Re: Nuhan: Haven + Framework 12", "pani puri, where is it?");
+    expect(check).toEqual({ onlyConfirmation: false, reason: "Asks about the venue." });
+    expect(calls[0]!.instructions).toContain("favorite food");
+    expect(calls[0]!.instructions).not.toContain("Applications open March 3.");
+    expect(calls[0]!.input).toContain("pani puri, where is it?");
+    expect(calls[0]!.text.format.name).toBe("confirmation_check");
+    expect(calls[0]!.prompt_cache_key).toBe("pudding-confirmations");
   });
 
   it("treats a cut-off response as an error", async () => {

@@ -79,12 +79,26 @@ describe("knowledge files", () => {
   });
 
   it("reads the sign-off and style notes", () => {
-    expect(loadStyle(dir)).toEqual({ signOff: "cheers,\nsam", notes: "Keep it short and lowercase." });
+    expect(loadStyle(dir)).toEqual({
+      signOff: "cheers,\nsam",
+      notes: "Keep it short and lowercase.",
+      confirmationReply: "Thanks! Your registration has been confirmed.",
+    });
+  });
+
+  it("reads a custom reply for sign-up confirmations", () => {
+    const custom = fs.mkdtempSync(path.join(os.tmpdir(), "pudding-style-"));
+    fs.writeFileSync(path.join(custom, "_style.md"), '---\nconfirmation_reply: "yay, you\'re confirmed :D"\n---\n');
+    expect(loadStyle(custom).confirmationReply).toBe("yay, you're confirmed :D");
   });
 
   it("works with no knowledge dir at all", () => {
     expect(loadDocs(path.join(dir, "missing"))).toEqual([]);
-    expect(loadStyle(path.join(dir, "missing"))).toEqual({ signOff: null, notes: "" });
+    expect(loadStyle(path.join(dir, "missing"))).toEqual({
+      signOff: null,
+      notes: "",
+      confirmationReply: "Thanks! Your registration has been confirmed.",
+    });
   });
 });
 
