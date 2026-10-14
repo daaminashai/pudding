@@ -151,6 +151,15 @@ describe("dashboard API", () => {
     expect(drafter.calls.at(-1)!.revise).toEqual({ previousDraft: "a long draft", instructions: "shorter" });
   });
 
+  it("uses knowledge docs added after startup when rewriting", async () => {
+    const { call, draft, drafter, deps } = await setup();
+    await call(`/api/drafts/${draft.id}/redo`, {});
+    fs.writeFileSync(path.join(deps.config.knowledgeDir, "sops.md"), "Travel help: none, sadly.");
+    await call(`/api/drafts/${draft.id}/redo`, {});
+    expect(drafter.calls.at(-2)!.knowledge.docs.map((d) => d.name)).toEqual(["faq.md"]);
+    expect(drafter.calls.at(-1)!.knowledge.docs.map((d) => d.name)).toEqual(["faq.md", "sops.md"]);
+  });
+
   it("drafts a skipped email on request, telling the drafter a reply is wanted", async () => {
     const reaction = conversation({ id: "cnv_react", messages: [{ id: "msg_react", text: "😃 Sam reacted via Gmail <https://x>" }] });
     const { call, state, drafter } = await setup([reaction]);

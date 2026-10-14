@@ -7,7 +7,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./log.js";
-import type { Knowledge } from "./knowledge.js";
+import { loadDocs, loadStyle, type Knowledge } from "./knowledge.js";
 import { errorMessage } from "./redact.js";
 import {
   buildKnowledge,
@@ -127,8 +127,15 @@ export class Dashboard {
     return this.scanPromise;
   }
 
+  /**
+   * Past replies are learned once and kept; the docs and style are read fresh
+   * each time (they're small local files), so an edit to knowledge/ shows up
+   * on the next Rewrite without restarting.
+   */
   private async getKnowledge(): Promise<Knowledge> {
-    return (this.knowledge ??= await buildKnowledge(this.deps));
+    const learned = (this.knowledge ??= await buildKnowledge(this.deps));
+    const dir = this.deps.config.knowledgeDir;
+    return { ...learned, docs: loadDocs(dir), style: loadStyle(dir) };
   }
 
   createServer(): http.Server {
