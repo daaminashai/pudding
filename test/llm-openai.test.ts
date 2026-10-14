@@ -37,7 +37,7 @@ describe("OpenAIDrafter", () => {
   it("puts instructions and knowledge in the cached prefix and the email in the input", async () => {
     const { client, calls } = fakeClient([ok("march 3!")]);
     const result = await new OpenAIDrafter("gpt-5.5", client).draft({ thread, knowledge, senderName: null });
-    expect(result).toEqual({ replyNeeded: true, reply: "march 3!", confidence: 0.9, needsHuman: false, note: "" });
+    expect(result).toEqual({ replyNeeded: true, leaveForPerson: false, reply: "march 3!", confidence: 0.9, needsHuman: false, note: "" });
     expect(calls[0]!.model).toBe("gpt-5.5");
     expect(calls[0]!.instructions).toContain("No em dashes");
     expect(calls[0]!.instructions).toContain("Applications open March 3.");

@@ -56,8 +56,9 @@ export function SkippedList({ items, onDrafted }: { items: Skipped[]; onDrafted:
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        No draft was written for these: automated mail (auto-replies, bounces, reactions, newsletters) and emails the
-        drafter judged don't need an answer.
+        No draft was written for these: automated mail (auto-replies, bounces, reactions, newsletters), emails the
+        drafter judged don't need an answer, and kinds of email your knowledge docs say you handle yourself. They're
+        still unanswered in Jelly.
       </p>
       <Card className="divide-y overflow-hidden">
         {items.map((s) => (

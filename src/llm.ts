@@ -25,6 +25,8 @@ export interface DraftRequest {
 export interface DraftResult {
   /** False when the email needs no answer (a reaction, a "thanks!" closing the thread…). */
   replyNeeded: boolean;
+  /** True when the knowledge docs say a person handles this kind of email: no draft, left in Jelly. */
+  leaveForPerson?: boolean;
   reply: string;
   confidence: number;
   needsHuman: boolean;
@@ -52,6 +54,7 @@ export class LlmError extends Error {
 
 export const OutputSchema = z.object({
   reply_needed: z.boolean(),
+  leave_for_person: z.boolean(),
   reply: z.string(),
   confidence: z.number(),
   needs_human: z.boolean(),
@@ -97,6 +100,9 @@ export function instructions(knowledge: Knowledge): string {
       '"thanks!" or "sounds good" that closes the conversation, an auto-reply, or spam. If the past replies show ' +
       "the team answering messages like this one, it needs a reply. When unsure, true. If false, leave reply empty " +
       "and say why in note.",
+    "- leave_for_person: true when the knowledge docs say a person on the team handles this kind of email " +
+      "themselves (for example, emails they list under \"leave these for a person\"). Then leave reply empty and " +
+      "say in note what kind of email it is. Otherwise false.",
     "- reply: the email body.",
     "- confidence: 0 to 1, how likely it is the reviewer can send the reply without changes.",
     "- needs_human: true if a person should look closely before sending: missing information, a complaint, " +
@@ -173,7 +179,7 @@ export type RawDraft = z.infer<typeof OutputSchema>;
 export abstract class PromptDrafter implements Drafter {
   async draft(request: DraftRequest): Promise<DraftResult> {
     const first = await this.call(request, request.revise);
-    if (!first.replyNeeded) return first;
+    if (!first.replyNeeded || first.leaveForPerson) return first;
     const tells = findAiTells(first.reply);
     if (tells.length === 0) return first;
     // Anything left over after this is flagged on the draft.
@@ -195,7 +201,9 @@ export abstract class PromptDrafter implements Drafter {
 
   private async call(request: DraftRequest, revise?: DraftRequest["revise"]): Promise<DraftResult> {
     let user = renderThread(request.thread, request.senderName);
-    if (request.forceReply) user += "\nThe reviewer wants a reply to this one, so reply_needed is true.";
+    if (request.forceReply) {
+      user += "\nThe reviewer wants a reply to this one, so reply_needed is true and leave_for_person is false.";
+    }
     if (revise) {
       user +=
         `\n\nA previous draft of the reply:\n<previous_draft>\n${revise.previousDraft}\n</previous_draft>\n\n` +
@@ -209,6 +217,7 @@ export abstract class PromptDrafter implements Drafter {
     });
     return {
       replyNeeded: request.forceReply ? true : out.reply_needed,
+      leaveForPerson: request.forceReply ? false : out.leave_for_person === true,
       reply: out.reply.trim(),
       confidence: Math.min(1, Math.max(0, out.confidence)),
       needsHuman: out.needs_human,

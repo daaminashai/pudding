@@ -36,7 +36,7 @@ describe("AnthropicDrafter", () => {
     const { client, calls } = fakeClient([{ reply_needed: true, reply: "march 3!", confidence: 0.9, needs_human: false, note: "" }]);
     const result = await new AnthropicDrafter("claude-opus-5-5", client).draft({ thread, knowledge, senderName: "Jane" });
 
-    expect(result).toEqual({ replyNeeded: true, reply: "march 3!", confidence: 0.9, needsHuman: false, note: "" });
+    expect(result).toEqual({ replyNeeded: true, leaveForPerson: false, reply: "march 3!", confidence: 0.9, needsHuman: false, note: "" });
     const params = calls[0]!;
     expect(params.model).toBe("claude-opus-5-5");
     expect(params.system[0].text).toContain("No em dashes");
@@ -47,6 +47,15 @@ describe("AnthropicDrafter", () => {
     expect(params.fallbacks).toBe("default");
     expect(params.betas).toEqual(["server-side-fallback-2026-07-01"]);
     expect(params.messages[0].content).toContain("The sender's name, as given: Jane");
+  });
+
+  it("passes on leave_for_person, unless the reviewer asked for a draft", async () => {
+    const out = { reply_needed: true, leave_for_person: true, reply: "", confidence: 1, needs_human: false, note: "organizer email" };
+    const { client } = fakeClient([out, { ...out, leave_for_person: false, reply: "hi!" }]);
+    const drafter = new AnthropicDrafter("claude-opus-5-5", client);
+    expect(await drafter.draft({ thread, knowledge, senderName: null })).toMatchObject({ leaveForPerson: true });
+    const forced = await drafter.draft({ thread, knowledge, senderName: null, forceReply: true });
+    expect(forced).toMatchObject({ leaveForPerson: false, reply: "hi!" });
   });
 
   it("leaves fallbacks off for models that don't support them", async () => {

@@ -319,6 +319,7 @@ async function handleConversation(
   const knowledge = await getKnowledge();
   try {
     const result = await drafter.draft({ thread, knowledge, senderName: sender.name, forceReply: force });
+    if (result.leaveForPerson) return skip(`left for you in Jelly: ${result.note || "the docs say a person handles these"}`);
     if (!result.replyNeeded) return skip(`no reply needed: ${result.note || "the drafter judged it doesn't need one"}`);
     content = {
       draft: finishReply(result.reply),

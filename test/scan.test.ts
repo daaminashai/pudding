@@ -318,6 +318,21 @@ describe("scan", () => {
     expect(state.pendingDrafts()).toHaveLength(1);
   });
 
+  it("leaves emails the docs say a person handles in Jelly, without a draft", async () => {
+    const { deps, state, drafter } = scanDeps([fixtures.clean()]);
+    drafter.respond = () => ({
+      replyNeeded: true,
+      leaveForPerson: true,
+      reply: "",
+      confidence: 0.9,
+      needsHuman: false,
+      note: "A sponsorship offer.",
+    });
+    await scan(deps);
+    expect(state.pendingDrafts()).toEqual([]);
+    expect(state.recentSkipped()[0]!.reason).toBe("left for you in Jelly: A sponsorship offer.");
+  });
+
   it("skips emails the drafter says need no reply, with its reason", async () => {
     const { deps, state, drafter } = scanDeps([fixtures.clean()]);
     drafter.respond = () => ({ replyNeeded: false, reply: "", confidence: 0.9, needsHuman: false, note: "Just a thank-you." });
