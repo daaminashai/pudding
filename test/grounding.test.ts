@@ -34,6 +34,15 @@ describe("grounding check", () => {
     expect(findUngrounded("call us on +44 20 7946 0000", [template]).some((p) => p.startsWith("phone"))).toBe(true);
   });
 
+  it("accepts links and addresses that fill in a placeholder from the docs", () => {
+    const faq = "Check out https://haven.hackclub.com/CITY! Or email CITY@haven.hackclub.com.";
+    const reply =
+      "see https://haven.hackclub.com/san-francisco or haven.hackclub.com/bengaluru, and email metro-manila@haven.hackclub.com";
+    expect(findUngrounded(reply, [faq])).toEqual([]);
+    expect(findUngrounded("see https://evil.example/san-francisco", [faq])).toEqual(["link https://evil.example/san-francisco"]);
+    expect(findUngrounded("email sf@hackclub.com", [faq])).toEqual(["email sf@hackclub.com"]);
+  });
+
   it("accepts numbers that come from the thread", () => {
     expect(findUngrounded("got it, order 81723 is noted", [template, "my order is #81723"])).toEqual([]);
   });
