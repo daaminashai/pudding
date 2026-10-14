@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { ConfigError } from "./config.js";
-import { DEFAULT_CONFIRMATION_REPLY } from "./confirmations.js";
+import { DEFAULT_CONFIRMATION_REPLY, isConfirmationSubject } from "./confirmations.js";
 import { checkHeaders, checkSender } from "./guardrails.js";
 import { log } from "./log.js";
 import type { ConversationDetail, MarmaladeClient } from "./marmalade.js";
@@ -168,10 +168,31 @@ export async function learnFromPastConversations(
       }),
     );
     o.onProgress?.(fetched);
-    for (const learned of results) learned.forEach(keep);
+    for (const learned of results) {
+      for (const e of learned) {
+        const cleaned = cleanExample(e);
+        if (cleaned) keep(cleaned);
+      }
+    }
   }
   return examples;
 }
+
+/**
+ * Runs on cached examples too, so they get the same treatment as new ones.
+ * Drops replies that were only a signature or a bare "Hi!", and stock
+ * sign-up confirmations: those get their own fixed reply, and as examples they
+ * crowded out real answers and taught every draft to open with "that's awesome!".
+ */
+export function cleanExample(e: Example): Example | null {
+  const reply = stripSignature(e.reply);
+  if (!reply || /^(hi|hey|hello)\W*$/i.test(reply)) return null;
+  if (isConfirmationSubject(e.subject) && reply.length < 200 && STOCK_CONFIRMATION.test(reply)) return null;
+  return { ...e, reply };
+}
+
+// "Your registration has been confirmed.", "registration confirmed :)", "Me too!! Confirmed :)", "Confirmed! See you".
+const STOCK_CONFIRMATION = /\bregistration\b[^.!?\n]{0,20}\bconfirmed\b|^[^\n]{0,40}\bconfirmed\b[\s!.:)D]*$|^confirmed\b/im;
 
 /** HTML comments are for whoever edits the file, not for the model. */
 function stripComments(text: string): string {

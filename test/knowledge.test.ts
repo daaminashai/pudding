@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { cleanDoc, extractExamples, loadDocs, loadStyle } from "../src/knowledge.js";
+import { cleanDoc, cleanExample, extractExamples, loadDocs, loadStyle, type Example } from "../src/knowledge.js";
 import { stripQuoted, stripSignature } from "../src/thread.js";
 import { conversation } from "./fixtures.js";
 
@@ -60,6 +60,42 @@ describe("learning from past conversations", () => {
     const tight = "thats awesome!\nYour registration has been confirmed.\nSana Deghat (She/Her)\n\nHaven Event Manager\n\nsana@hackclub.com";
     expect(stripSignature(tight)).toBe("thats awesome!\nYour registration has been confirmed.");
     expect(stripSignature("no signature here.\nbye")).toBe("no signature here.\nbye");
+  });
+
+  it("strips Hack Club signatures with a phone line or footer and no email", () => {
+    const footer =
+      "Hack Club (https://hackclub.com/) is an open source (https://github.com/hackclub/) and financially transparent 501(c)(3) nonprofit.";
+    expect(stripSignature(`Me too!! Confirmed :)\n\nSincerely,\n\nBarnav Mitra\n\nHaven Director\n\nT: +1 (646) 555-0100\n\n${footer}`)).toBe(
+      "Me too!! Confirmed :)",
+    );
+    // A reply that was only a signature leaves nothing to learn from.
+    expect(stripSignature(`Jolly Wang\n\nHaven Director @ Hack Club HQ\n\nC: +1 (949) 555-0100\n\n${footer}`)).toBe("");
+    expect(stripSignature(`Venue details come closer to the event!\n\n${footer}`)).toBe("Venue details come closer to the event!");
+  });
+
+  it("keeps a forwarded email that has nothing written above it", () => {
+    const fwd = "---------- Forwarded message ---------\nFrom: Haven Plovdiv\nSubject: Haven Plovdiv\n\nHello, a sponsor wants an AI track.";
+    expect(stripQuoted(fwd)).toBe(fwd);
+    expect(stripQuoted(`see below\n\n${fwd}`)).toBe("see below");
+  });
+});
+
+describe("cleanExample", () => {
+  const ex = (subject: string, reply: string): Example => ({ subject, question: "q", reply, at: "2026-10-01", source: "past" });
+
+  it("drops stock sign-up confirmations, bare greetings and signature-only replies", () => {
+    expect(cleanExample(ex("Re: Kacper: Haven + Framework 12", "thats awesome!\n\nYour registration has been confirmed."))).toBeNull();
+    expect(cleanExample(ex("Re: S: Haven Sign Up Confirmation", "Hi!"))).toBeNull();
+    for (const stock of ["Me too!! Confirmed :)", "cheese is so valid. registration confirmed :)", "Confirmed! Excited to see you at Haven Islamabad :)", "Thanks! Your registration is now confirmed!"]) {
+      expect(cleanExample(ex("Re: Bo: Haven Sign Up Confirmation", stock)), stock).toBeNull();
+    }
+    expect(cleanExample(ex("Question", "Jolly Wang\n\nHaven Director\n\nC: +1 (949) 555-0100"))).toBeNull();
+  });
+
+  it("keeps real answers, including ones in confirmation threads", () => {
+    const venue = "Some events don't have confirmed venues yet, so location info comes closer to the event. Keep an eye on your inbox, and email your city's team for anything specific.";
+    expect(cleanExample(ex("Re: Uday: Haven Sign Up Confirmation", venue))?.reply).toBe(venue);
+    expect(cleanExample(ex("Is it free?", "yep!\n\nCheers"))?.reply).toBe("yep!");
   });
 });
 

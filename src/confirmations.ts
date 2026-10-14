@@ -13,6 +13,11 @@ const CONFIRMATION_SUBJECT = /(sign[\s-]?up confirmation|\+ framework 12)\s*$/i;
 // The confirmation email's own wording, found in the quoted history.
 const CONFIRMATION_ASK = /confirm\s+your\s+registration[\s\S]{0,60}?favou?rite\s+food/i;
 
+/** "Re: Bela: Haven + Framework 12": a reply to the sign-up confirmation email, by its subject. */
+export function isConfirmationSubject(subject: string): boolean {
+  return REPLY_PREFIX.test(subject) && CONFIRMATION_SUBJECT.test(subject.replace(REPLY_PREFIX, ""));
+}
+
 export interface ConfirmationInput {
   subject: string;
   thread: ThreadEntry[];
@@ -33,8 +38,7 @@ export function isConfirmationCandidate({ subject, thread, question }: Confirmat
   const inbound = thread.filter((e) => e.kind === "inbound");
   const latest = inbound.at(-1);
   if (!latest) return false;
-  const replySubject = REPLY_PREFIX.test(subject) && CONFIRMATION_SUBJECT.test(subject.replace(REPLY_PREFIX, ""));
-  return replySubject || CONFIRMATION_ASK.test(latest.text);
+  return isConfirmationSubject(subject) || CONFIRMATION_ASK.test(latest.text);
 }
 
 /**

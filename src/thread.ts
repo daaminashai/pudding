@@ -78,12 +78,18 @@ function isAttribution(lines: string[], i: number): boolean {
   return /^On\s.{4,300}?\bwrote:/.test(joined);
 }
 
-/** Drops quoted history ("On … wrote:", "> …") so only the new text is left. */
+const FORWARDED = /^-{2,}\s*Forwarded message\s*-{2,}/i;
+
+/**
+ * Drops quoted history ("On … wrote:", "> …") so only the new text is left. A
+ * forward with nothing written above it is the message itself, so it's kept.
+ */
 export function stripQuoted(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+    if (FORWARDED.test(line.trim()) && out.join("").trim() === "") return text.trim();
     if (isAttribution(lines, i) || QUOTE_MARKERS.some((re) => re.test(line.trim()))) break;
     if (line.trimStart().startsWith(">")) continue;
     out.push(line);
@@ -92,19 +98,30 @@ export function stripQuoted(text: string): string {
 }
 
 const EMAIL_LINE = /^[\w.+'-]+@[\w-]+(\.[\w-]+)+(\s*\(mailto:[^)]*\))?$/;
+// "C: +1 (949) 555-0100"
+const PHONE_LINE = /^(c|t|m|p|ph|phone|cell|mobile|tel)\s*[:.]\s*\+?[\d\s().-]{7,}$/i;
+// "Hack Club (https://hackclub.com/) is an open source … 501(c)(3) nonprofit."
+const FOOTER_LINE = /^hack club\b.*\b(open source|nonprofit|501\(c\)\(3\))/i;
+/** A closing on its own line: "Cheers", "Sincerely,", "Kind regards"… */
+export const CLOSING_LINE =
+  /^(cheers|best|best wishes|all the best|(kind |warm |best )?regards|warmly|sincerely|thanks|thank you|thanks again|many thanks)[\s,.!]*$/i;
 
 /**
- * Drops a sign-off block from one of our replies: the email-address line plus
- * the short name/title/closing lines just above it, and everything after. Jelly
- * appends each sender's signature itself, so examples shouldn't teach one.
+ * Drops the sign-off from one of our replies: from a closing line ("Sincerely,"),
+ * or from the name and title lines above an email address, phone number or the
+ * Hack Club footer, to the end. Jelly appends each sender's signature itself, so
+ * examples shouldn't teach one. A reply that was only a signature comes back empty.
  */
 export function stripSignature(text: string): string {
   const lines = text.split(/\r?\n/);
-  let cut = lines.findIndex((l, i) => i > 0 && (l === "-- " || EMAIL_LINE.test(l.trim())));
-  if (cut === -1) return text.trim();
-  if (lines[cut] !== "-- ") {
+  const closing = lines.findIndex((l, i) => i > 0 && CLOSING_LINE.test(l.trim()));
+  let cut = lines.findIndex((l, i) => {
+    const line = l.trim();
+    return i > 0 && (l === "-- " || EMAIL_LINE.test(line) || PHONE_LINE.test(line) || FOOTER_LINE.test(line));
+  });
+  if (cut !== -1 && lines[cut] !== "-- ") {
     let kept = 0;
-    for (let i = cut - 1; i > 0 && kept < 3; i--) {
+    for (let i = cut - 1; i >= 0 && kept < 3; i--) {
       const line = lines[i]!.trim();
       if (line === "") continue;
       if (line.length > 60 || /[.?!:]$/.test(line)) break;
@@ -112,7 +129,8 @@ export function stripSignature(text: string): string {
       kept++;
     }
   }
-  return lines.slice(0, cut).join("\n").trim();
+  const end = Math.min(...[closing, cut, lines.length].filter((n) => n !== -1));
+  return lines.slice(0, end).join("\n").trim();
 }
 
 const ENTITIES: Record<string, string> = {

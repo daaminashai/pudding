@@ -23,7 +23,7 @@ import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from ".
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
 import type { DraftContent, DraftKind, State } from "./state.js";
-import { latestMessage, messageText, messageTime, stripQuoted, toThread, type Thread } from "./thread.js";
+import { CLOSING_LINE, latestMessage, messageText, messageTime, stripQuoted, toThread, type Thread } from "./thread.js";
 
 export interface ScanDeps {
   config: Pick<
@@ -113,9 +113,6 @@ export function contentFlags(reply: string, knowledge: Knowledge, thread: Thread
   return flags;
 }
 
-// A closing line on its own ("Cheers," / "Kind regards") and maybe a name under it.
-const CLOSING = /^(cheers|best|best wishes|all the best|(kind |warm |best )?regards|warmly|sincerely|thanks again|many thanks)[\s,.!]*$/i;
-
 /**
  * The reply as it goes in the box: trimmed, and without a closing line the
  * model added anyway, since Jelly puts the sender's signature right below it.
@@ -123,9 +120,9 @@ const CLOSING = /^(cheers|best|best wishes|all the best|(kind |warm |best )?rega
 export function finishReply(reply: string): string {
   const lines = reply.trim().split(/\r?\n/);
   const last = (n: number) => lines[lines.length - n]?.trim() ?? "";
-  if (lines.length > 2 && CLOSING.test(last(2)) && last(1).length <= 40 && !/[.?!:]$/.test(last(1))) {
+  if (lines.length > 2 && CLOSING_LINE.test(last(2)) && last(1).length <= 40 && !/[.?!:]$/.test(last(1))) {
     lines.splice(-2); // "Cheers,\nDaamin"
-  } else if (lines.length > 1 && CLOSING.test(last(1))) {
+  } else if (lines.length > 1 && CLOSING_LINE.test(last(1))) {
     lines.splice(-1);
   }
   return lines.join("\n").trim();
