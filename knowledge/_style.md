@@ -1,9 +1,4 @@
 ---
-# Uncomment and fill in to append the same sign-off to every reply.
-# Leave it commented out to let the drafter sign off like past replies do.
-# sign_off: |
-#   cheers,
-#   your name
 # The reply to sign-up confirmations that only share a favorite food (the Confirmations tab).
 # confirmation_reply: "Thanks! Your registration has been confirmed."
 ---

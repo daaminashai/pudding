@@ -147,7 +147,7 @@ describe("dashboard API", () => {
     });
     const res = await call(`/api/drafts/${draft.id}/redo`, { instructions: "shorter", text: "a long draft" });
     expect(res.status).toBe(200);
-    expect((await res.json()).draft).toBe("march 3!\n\ncheers,\nthe team");
+    expect((await res.json()).draft).toBe("march 3!");
     expect(drafter.calls.at(-1)!.revise).toEqual({ previousDraft: "a long draft", instructions: "shorter" });
   });
 
@@ -213,7 +213,7 @@ describe("confirmations", () => {
     expect(res.status).toBe(202);
     const state = await untilDone(call);
     expect(state.bulk).toMatchObject({ total: 3, processed: 3, sent: 3, failed: [], stoppedReason: null });
-    expect(sender.sent.map((s) => s.text)).toEqual(Array(3).fill("Thanks! Your registration has been confirmed.\n\ncheers,\nthe team"));
+    expect(sender.sent.map((s) => s.text)).toEqual(Array(3).fill("Thanks! Your registration has been confirmed."));
     expect(sender.sent[1]!.at - sender.sent[0]!.at).toBeGreaterThanOrEqual(35);
     expect(sender.sent[2]!.at - sender.sent[1]!.at).toBeGreaterThanOrEqual(35);
     expect(ctxState.pendingDrafts("confirmation")).toEqual([]);
@@ -291,7 +291,7 @@ describe("confirmations", () => {
     const id = state.pendingDrafts("confirmation")[0]!.id;
     const res = await call(`/api/drafts/${id}/full`, {});
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ kind: "reply", draft: "hey! applications open march 3.\n\ncheers,\nthe team" });
+    expect(await res.json()).toMatchObject({ kind: "reply", draft: "hey! applications open march 3." });
     expect(drafter.calls.at(-1)!.forceReply).toBe(true);
     expect(state.pendingDrafts("reply").map((d) => d.id)).toEqual([id]);
   });

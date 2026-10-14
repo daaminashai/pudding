@@ -2,7 +2,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LlmError } from "../src/llm.js";
-import { scan } from "../src/scan.js";
+import { finishReply, scan } from "../src/scan.js";
 import { State } from "../src/state.js";
 import { conversation, fixtures, withMessage } from "./fixtures.js";
 import { knowledgeDir, MAILBOX, scanDeps } from "./helpers.js";
@@ -27,7 +27,7 @@ describe("scan", () => {
     ]);
 
     const draft = drafts.find((d) => d.conversationId === "cnv_clean")!;
-    expect(draft.draft).toBe("hey! applications open march 3.\n\ncheers,\nthe team");
+    expect(draft.draft).toBe("hey! applications open march 3.");
     expect(draft.sender).toBe("jane@example.com");
     expect(draft.flags).toEqual([]);
     expect(drafts.find((d) => d.conversationId === "cnv_attach")!.flags.map((f) => f.kind)).toEqual(["attachments"]);
@@ -47,6 +47,22 @@ describe("scan", () => {
     await scan(deps);
     await scan(deps);
     expect(drafter.calls).toHaveLength(1);
+  });
+
+  it("drops a closing line the model adds, since Jelly adds the signature", async () => {
+    const { deps, state, drafter } = scanDeps([fixtures.clean()]);
+    drafter.respond = () => ({
+      replyNeeded: true,
+      reply: "march 3!\n\nCheers,\nDaamin\n\n",
+      confidence: 0.9,
+      needsHuman: false,
+      note: "",
+    });
+    await scan(deps);
+    expect(state.pendingDrafts()[0]!.draft).toBe("march 3!");
+    expect(finishReply("see you there.\n\nKind regards")).toBe("see you there.");
+    expect(finishReply("Best of luck with the jam")).toBe("Best of luck with the jam");
+    expect(finishReply("ok!\nCheers")).toBe("ok!");
   });
 
   it("only fetches conversations with new activity on later scans", async () => {
@@ -96,7 +112,7 @@ describe("scan", () => {
     expect(state.pendingDrafts("confirmation")).toEqual([
       expect.objectContaining({
         kind: "confirmation",
-        draft: "Thanks! Your registration has been confirmed.\n\ncheers,\nthe team",
+        draft: "Thanks! Your registration has been confirmed.",
         confidence: 1,
         needsHuman: false,
         note: "Just their favorite food.",
@@ -176,7 +192,7 @@ describe("scan", () => {
     const reopened = new State(file);
     await scan({ ...deps, state: reopened });
     expect(reopened.pendingDrafts("confirmation")).toEqual([
-      expect.objectContaining({ conversationId: "cnv_food", draft: "Thanks! Your registration has been confirmed.\n\ncheers,\nthe team" }),
+      expect.objectContaining({ conversationId: "cnv_food", draft: "Thanks! Your registration has been confirmed." }),
     ]);
     expect(reopened.pendingDrafts("reply").map((d) => d.conversationId).sort()).toEqual(["cnv_clean", "cnv_q"]);
     // Only the two that look like confirmation replies needed the model.

@@ -113,9 +113,22 @@ export function contentFlags(reply: string, knowledge: Knowledge, thread: Thread
   return flags;
 }
 
-export function withSignOff(reply: string, style: Style): string {
-  if (!reply.trim()) return "";
-  return style.signOff ? `${reply.trim()}\n\n${style.signOff}` : reply.trim();
+// A closing line on its own ("Cheers," / "Kind regards") and maybe a name under it.
+const CLOSING = /^(cheers|best|best wishes|all the best|(kind |warm |best )?regards|warmly|sincerely|thanks again|many thanks)[\s,.!]*$/i;
+
+/**
+ * The reply as it goes in the box: trimmed, and without a closing line the
+ * model added anyway, since Jelly puts the sender's signature right below it.
+ */
+export function finishReply(reply: string): string {
+  const lines = reply.trim().split(/\r?\n/);
+  const last = (n: number) => lines[lines.length - n]?.trim() ?? "";
+  if (lines.length > 2 && CLOSING.test(last(2)) && last(1).length <= 40 && !/[.?!:]$/.test(last(1))) {
+    lines.splice(-2); // "Cheers,\nDaamin"
+  } else if (lines.length > 1 && CLOSING.test(last(1))) {
+    lines.splice(-1);
+  }
+  return lines.join("\n").trim();
 }
 
 /**
@@ -311,7 +324,7 @@ async function handleConversation(
     const result = await drafter.draft({ thread, knowledge, senderName: sender.name, forceReply: force });
     if (!result.replyNeeded) return skip(`no reply needed: ${result.note || "the drafter judged it doesn't need one"}`);
     content = {
-      draft: withSignOff(result.reply, knowledge.style),
+      draft: finishReply(result.reply),
       confidence: result.confidence,
       needsHuman: result.needsHuman,
       note: result.note,
@@ -351,7 +364,7 @@ export async function checkConfirmation(drafter: Drafter, input: ConfirmationInp
 
 export function confirmationContent(style: Style, reason: string, flags: Flag[]): DraftContent {
   return {
-    draft: withSignOff(style.confirmationReply, style),
+    draft: style.confirmationReply.trim(),
     confidence: 1,
     needsHuman: false,
     note: reason,

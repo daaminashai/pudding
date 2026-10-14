@@ -28,8 +28,6 @@ export interface Example {
 }
 
 export interface Style {
-  /** Appended after every reply, if set. Otherwise the drafter signs off like past replies do. */
-  signOff: string | null;
   notes: string;
   /** The reply to sign-up confirmations that only share a favorite food. */
   confirmationReply: string;
@@ -65,15 +63,14 @@ export function loadDocs(dir: string): KnowledgeDoc[] {
 export function loadStyle(dir: string): Style {
   const file = path.join(dir, "_style.md");
   const confirmationReply = DEFAULT_CONFIRMATION_REPLY;
-  if (!fs.existsSync(file)) return { signOff: null, notes: "", confirmationReply };
+  if (!fs.existsSync(file)) return { notes: "", confirmationReply };
   const raw = fs.readFileSync(file, "utf8");
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-  if (!match) return { signOff: null, notes: stripComments(raw), confirmationReply };
+  if (!match) return { notes: stripComments(raw), confirmationReply };
   const data = YAML.parse(match[1] ?? "") ?? {};
   if (typeof data !== "object" || Array.isArray(data)) throw new ConfigError(`${file}: frontmatter must be a mapping`);
   const text = (key: string) => (typeof data[key] === "string" && data[key].trim() ? (data[key].trim() as string) : null);
   return {
-    signOff: text("sign_off"),
     notes: stripComments(match[2] ?? ""),
     confirmationReply: text("confirmation_reply") ?? confirmationReply,
   };

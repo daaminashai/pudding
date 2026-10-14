@@ -7,7 +7,7 @@ import { OpenAIDrafter } from "../src/llm-openai.js";
 const knowledge: Knowledge = {
   docs: [{ name: "faq.md", text: "Applications open March 3." }],
   examples: [],
-  style: { signOff: null, notes: "", confirmationReply: "Thanks! Your registration has been confirmed." },
+  style: { notes: "", confirmationReply: "Thanks! Your registration has been confirmed." },
 };
 const thread = {
   subject: "When?",

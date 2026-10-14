@@ -55,9 +55,9 @@ anything else that's true and current. To export a Google Doc, use File → Down
 embedded in the export are stripped automatically. Every file is sent with every draft, so remove outdated ones.
 Files starting with `_` aren't sent.
 
-`knowledge/_style.md` holds an optional fixed sign-off and notes on tone. Leave it alone to start: the drafter already
-copies the voice of your past replies, and leaves out the signature block (name, title, email, Hack Club footer)
-because Jelly adds each sender's own when the reply goes out.
+`knowledge/_style.md` holds optional notes on tone and the reply used for sign-up confirmations. Leave it alone to
+start: the drafter already copies the voice of your past replies. Replies never end with a closing line, a name or a
+signature, because Jelly puts the sender's own signature right below the reply (on the next line, with no gap).
 
 ## Using it
 

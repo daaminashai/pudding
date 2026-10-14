@@ -69,7 +69,7 @@ describe("knowledge files", () => {
   fs.mkdirSync(path.join(dir, "guides"));
   fs.writeFileSync(path.join(dir, "guides", "organizer.txt"), "Doors open at 9.");
   fs.writeFileSync(path.join(dir, "notes.pdf"), "binary");
-  fs.writeFileSync(path.join(dir, "_style.md"), "---\nsign_off: |\n  cheers,\n  sam\n---\nKeep it short and lowercase.");
+  fs.writeFileSync(path.join(dir, "_style.md"), "---\nconfirmation_reply: yay\n---\nKeep it short and lowercase.");
 
   it("loads .md and .txt docs recursively, skipping _ files", () => {
     expect(loadDocs(dir)).toEqual([
@@ -78,12 +78,8 @@ describe("knowledge files", () => {
     ]);
   });
 
-  it("reads the sign-off and style notes", () => {
-    expect(loadStyle(dir)).toEqual({
-      signOff: "cheers,\nsam",
-      notes: "Keep it short and lowercase.",
-      confirmationReply: "Thanks! Your registration has been confirmed.",
-    });
+  it("reads the style notes and confirmation reply", () => {
+    expect(loadStyle(dir)).toEqual({ notes: "Keep it short and lowercase.", confirmationReply: "yay" });
   });
 
   it("reads a custom reply for sign-up confirmations", () => {
@@ -95,7 +91,6 @@ describe("knowledge files", () => {
   it("works with no knowledge dir at all", () => {
     expect(loadDocs(path.join(dir, "missing"))).toEqual([]);
     expect(loadStyle(path.join(dir, "missing"))).toEqual({
-      signOff: null,
       notes: "",
       confirmationReply: "Thanks! Your registration has been confirmed.",
     });

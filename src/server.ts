@@ -17,7 +17,7 @@ import {
   memberNames,
   processConversation,
   scan,
-  withSignOff,
+  finishReply,
   type ScanDeps,
   type ScanProgress,
 } from "./scan.js";
@@ -489,7 +489,7 @@ export class Dashboard {
       forceReply: kind === "reply" ? true : undefined,
     });
     const content = {
-      draft: withSignOff(result.reply, knowledge.style),
+      draft: finishReply(result.reply),
       confidence: result.confidence,
       needsHuman: result.needsHuman,
       note: result.note,

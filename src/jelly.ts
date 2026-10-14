@@ -160,13 +160,19 @@ export function textToHtml(text: string): string {
     .join("");
 }
 
+// Jelly's box starts with empty lines for typing in ("<br>\n<br>\n" above the
+// signature in real sends); any mix of these is dropped.
+const LEADING_BLANK = /^(?:\s|&nbsp;|<br\s*\/?>|<(div|p)>(?:\s|&nbsp;|<br\s*\/?>)*<\/\1>)+/i;
+
 /**
- * The reply goes above whatever Jelly pre-filled (signature, then the quoted
- * email), separated by one blank line, matching a reply typed by hand.
+ * The reply goes above whatever Jelly pre-filled, with the sender's signature
+ * on the very next line. With no signature, one blank line separates the
+ * reply from the quoted email.
  */
 export function composeHtmlBody(reply: string, prefilled: string): string {
-  const rest = prefilled.replace(/^(\s*<div><br\s*\/?><\/div>)+/i, "");
-  return `${textToHtml(reply)}<div><br></div>${rest}`;
+  const rest = prefilled.replace(LEADING_BLANK, "");
+  const gap = rest === "" || /^<div[^>]*\bjelly-signature\b/i.test(rest) ? "" : "<div><br></div>";
+  return `${textToHtml(reply)}${gap}${rest}`;
 }
 
 /** The send request's fields: the draft form's own, with our body and the captured defaults. */

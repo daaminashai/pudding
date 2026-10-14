@@ -109,7 +109,7 @@ export function scanDeps(conversations: ConversationDetail[], files?: Record<str
       knowledgeDir: knowledgeDir(
         files ?? {
           "faq.md": "Applications open March 3. It's free.",
-          "_style.md": "---\nsign_off: |\n  cheers,\n  the team\n---\nshort and friendly",
+          "_style.md": "short and friendly",
         },
       ),
     },

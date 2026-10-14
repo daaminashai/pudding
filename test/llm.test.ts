@@ -6,7 +6,7 @@ import { AnthropicDrafter, LlmError, renderThread } from "../src/llm.js";
 const knowledge: Knowledge = {
   docs: [{ name: "faq.md", text: "Applications open March 3." }],
   examples: [{ subject: "Free?", question: "is it free?", reply: "yep!", at: "2026-09-01", source: "past" }],
-  style: { signOff: "cheers,\nsam", notes: "lowercase is fine", confirmationReply: "Thanks! Your registration has been confirmed." },
+  style: { notes: "lowercase is fine", confirmationReply: "Thanks! Your registration has been confirmed." },
 };
 const thread = {
   subject: "When?",
@@ -40,7 +40,7 @@ describe("AnthropicDrafter", () => {
     const params = calls[0]!;
     expect(params.model).toBe("claude-opus-5-5");
     expect(params.system[0].text).toContain("No em dashes");
-    expect(params.system[0].text).toContain("cheers,\nsam");
+    expect(params.system[0].text).toContain("No closing line");
     expect(params.system[1].text).toContain("Applications open March 3.");
     expect(params.system[1].text).toContain("<we_replied>\nyep!\n</we_replied>");
     expect(params.system[1].cache_control).toEqual({ type: "ephemeral" });

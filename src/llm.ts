@@ -79,10 +79,8 @@ export function instructions(knowledge: Knowledge): string {
       'reaching out", "I hope this helps", "Feel free to reach out", "Don\'t hesitate to", "I\'d be happy to", ' +
       '"Certainly" or "Absolutely". Don\'t repeat their question back to them.',
     "- Answer what they asked, then stop. Short is good. Use their name if they gave one.",
-    style.signOff
-      ? "- Don't add a sign-off or signature. This one is appended automatically:\n" + style.signOff
-      : "- Don't write a signature (name, title, email, footer): Jelly adds the sender's own when the reply is " +
-        'sent. A short closing word like "Cheers" is fine if the past replies use one.',
+    "- End with the last sentence of the reply. No closing line (\"Cheers\", \"Best\", \"Kind regards\"…), no " +
+      "name and no signature: Jelly puts the sender's own signature right below the reply.",
     ...(style.notes ? ["", "Notes from the team on how replies should sound:", style.notes] : []),
     "",
     "Facts:",
