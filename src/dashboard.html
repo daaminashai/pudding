@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pudding Drafts</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --surface: #ffffff; --surface-2: #f0eee9; --text: #1d1c1a; --muted: #6b6862;
+    --border: #e2dfd8; --accent: #2f6f4f; --accent-text: #ffffff; --accent-soft: #e3efe8;
+    --warn: #8a5a00; --warn-soft: #fbf0d9; --bad: #a3322a; --bad-soft: #f8e3e1; --ok: #2f6f4f; --ok-soft: #e3efe8;
+    --note-soft: #eef0f8; --focus: #2f6f4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --surface: #1f1f1c; --surface-2: #272724; --text: #ecebe7; --muted: #a3a09a;
+      --border: #34332f; --accent: #6fbf94; --accent-text: #10241a; --accent-soft: #1f3329;
+      --warn: #e8b85c; --warn-soft: #3a2f1a; --bad: #f08a80; --bad-soft: #3d2220; --ok: #6fbf94; --ok-soft: #1f3329;
+      --note-soft: #252838; --focus: #6fbf94;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --surface: #1f1f1c; --surface-2: #272724; --text: #ecebe7; --muted: #a3a09a;
+    --border: #34332f; --accent: #6fbf94; --accent-text: #10241a; --accent-soft: #1f3329;
+    --warn: #e8b85c; --warn-soft: #3a2f1a; --bad: #f08a80; --bad-soft: #3d2220; --ok: #6fbf94; --ok-soft: #1f3329;
+    --note-soft: #252838; --focus: #6fbf94;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  button, textarea, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .grow { flex: 1; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .btn {
+    border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 7px 14px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.quiet:hover { color: var(--text); background: var(--surface-2); }
+  .banner {
+    border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 10px 14px;
+    margin-bottom: 12px; font-size: 14px;
+  }
+  .banner.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+  .banner.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+  .progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 8px 0 16px; overflow-x: auto; }
+  nav button {
+    border: 0; background: none; padding: 8px 12px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+  }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 2px; overflow-wrap: anywhere; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; font-size: 13px; color: var(--muted); }
+  .meta a { color: var(--accent); text-decoration: none; }
+  .meta a:hover { text-decoration: underline; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; }
+  .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.bad { background: var(--bad-soft); color: var(--bad); }
+  .details { margin: 8px 0 0; padding: 0 0 0 18px; font-size: 13px; color: var(--muted); }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; font-style: italic; overflow-wrap: anywhere; }
+  .msg {
+    background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 14px;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto;
+  }
+  .msg.note-entry { background: var(--note-soft); }
+  .msg .who { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; white-space: normal; }
+  .toggle { margin-top: 6px; }
+  textarea {
+    width: 100%; margin-top: 14px; resize: vertical; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; background: var(--surface); line-height: 1.5;
+  }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .redo { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .redo input {
+    flex: 1; min-width: 200px; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    background: var(--surface);
+  }
+  .done-panel { background: var(--ok-soft); color: var(--ok); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+  .error { color: var(--bad); font-size: 13px; margin-top: 8px; }
+  .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
+  .row { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .row .title { font-weight: 600; overflow-wrap: anywhere; }
+  details.final summary { cursor: pointer; font-size: 13px; color: var(--muted); margin-top: 4px; }
+  details.final pre { white-space: pre-wrap; font: inherit; font-size: 14px; margin: 6px 0 0; overflow-wrap: anywhere; }
+  @media (max-width: 520px) {
+    .wrap { padding-top: 16px; }
+    .actions .btn { flex: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Pudding</h1>
+    <span class="muted small" id="summary"></span>
+    <span class="grow"></span>
+    <button class="btn" id="scan">Check inbox</button>
+  </header>
+  <div id="scanBanner" class="banner" hidden>
+    <div id="scanText"></div>
+    <div class="progress"><div id="scanBar" style="width:0%"></div></div>
+  </div>
+  <div id="sendBanner" class="banner warn" hidden></div>
+  <div id="errorBanner" class="banner bad" hidden></div>
+  <nav role="tablist">
+    <button role="tab" data-tab="review" aria-selected="true">To review <span id="nReview"></span></button>
+    <button role="tab" data-tab="done" aria-selected="false">Done <span id="nDone"></span></button>
+    <button role="tab" data-tab="skipped" aria-selected="false">Skipped <span id="nSkipped"></span></button>
+  </nav>
+  <section id="review"></section>
+  <section id="done" hidden></section>
+  <section id="skipped" hidden></section>
+</div>
+<script>
+const TOKEN = "__TOKEN__";
+let state = null;
+let pollTimer = null;
+const cards = new Map();       // draft id -> { el, updatedAt }
+const justDecided = new Set(); // keep these cards visible after approve/discard
+
+const FLAG_LABELS = {
+  assigned: ["Assigned", "warn"],
+  attachments: ["Has attachments", "warn"],
+  long_thread: ["Long thread", ""],
+  unknown_sender: ["Unknown sender", ""],
+  unverified: ["Check the facts", "bad"],
+  ai_style: ["Sounds AI-written", "warn"],
+};
+
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined || c === false) continue;
+    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return el;
+}
+
+function safeUrl(url) {
+  return typeof url === "string" && /^https?:\/\//i.test(url) ? url : null;
+}
+
+function ago(iso) {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!isFinite(s)) return "";
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "x-pudding-token": TOKEN, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+
+function senderLine(d) {
+  const url = safeUrl(d.conversationUrl);
+  const who = d.senderName && d.sender ? `${d.senderName} <${d.sender}>` : (d.sender || d.senderName);
+  return h("div", { class: "meta" },
+    who ? h("span", {}, who) : null,
+    who ? h("span", {}, "·") : null,
+    h("span", { title: d.receivedAt }, ago(d.receivedAt)),
+    url ? h("span", {}, "·") : null,
+    url ? h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, "Open in Jelly ↗") : null,
+  );
+}
+
+function chipsFor(d) {
+  const chips = [];
+  const pct = Math.round(d.confidence * 100);
+  chips.push(h("span", { class: `chip ${d.confidence >= 0.8 ? "ok" : d.confidence >= 0.5 ? "" : "warn"}` }, `${pct}% confident`));
+  if (d.needsHuman) chips.push(h("span", { class: "chip warn" }, "Needs a careful look"));
+  for (const f of d.flags) {
+    const [label, tone] = FLAG_LABELS[f.kind] || [f.kind, ""];
+    chips.push(h("span", { class: `chip ${tone}`, title: f.detail }, label));
+  }
+  return h("div", { class: "chips" }, chips);
+}
+
+function threadView(d) {
+  const entries = d.thread;
+  const latestInbound = [...entries].reverse().find((e) => e.kind === "inbound") || entries[entries.length - 1];
+  const entryEl = (e) => {
+    const fresh = e.newText || e.text;
+    const body = h("span", {}, fresh);
+    const hasQuote = e.text.trim() !== fresh.trim();
+    const toggle = hasQuote ? h("button", { class: "btn quiet small toggle", type: "button" }, "Show quoted text") : null;
+    toggle?.addEventListener("click", () => {
+      const showing = toggle.textContent === "Hide quoted text";
+      body.textContent = showing ? fresh : e.text;
+      toggle.textContent = showing ? "Show quoted text" : "Hide quoted text";
+    });
+    return h("div", { class: `msg ${e.kind === "note" ? "note-entry" : ""}` },
+      h("span", { class: "who" },
+        e.kind === "inbound" ? (e.from === "sender" ? "They wrote" : `${e.from} wrote`) : e.kind === "outbound" ? "We replied" : "Internal note",
+        ` · ${ago(e.at)}`),
+      body,
+      toggle ? h("div", {}, toggle) : null);
+  };
+  const box = h("div", {}, latestInbound ? entryEl(latestInbound) : null);
+  if (entries.length > 1) {
+    let open = false;
+    const btn = h("button", { class: "btn quiet small toggle", type: "button" }, `Show whole thread (${entries.length})`);
+    btn.addEventListener("click", () => {
+      open = !open;
+      box.replaceChildren(...(open ? entries.map(entryEl) : [entryEl(latestInbound)]));
+      btn.textContent = open ? "Show latest message only" : `Show whole thread (${entries.length})`;
+    });
+    return h("div", {}, box, btn);
+  }
+  return box;
+}
+
+function draftCard(d) {
+  const textarea = h("textarea", { "aria-label": `Reply to ${d.subject || "email"}`, spellcheck: "true" });
+  textarea.value = d.draft;
+  textarea.dataset.original = d.draft;
+  // Rough fit to the draft: one row per line plus wrapped lines at ~85 chars.
+  const fit = () => {
+    const rows = textarea.value.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 85)), 0);
+    textarea.rows = Math.min(24, Math.max(5, rows + 1));
+  };
+  fit();
+  textarea.addEventListener("input", fit);
+  const error = h("div", { class: "error", role: "alert" });
+  const status = h("span", { class: "muted small" });
+  const card = h("article", { class: "card", "data-id": d.id });
+
+  const setBusy = (busy, label) => {
+    card.querySelectorAll("button, textarea, input").forEach((el) => (el.disabled = busy));
+    status.textContent = busy ? label : "";
+  };
+
+  const approve = h("button", { class: "btn primary", type: "button" },
+    state.sending.reasonUnavailable ? "Approve & copy" : "Approve & send");
+  approve.addEventListener("click", async () => {
+    error.textContent = "";
+    if (!state.sending.reasonUnavailable && !confirm(`Send this reply now${d.sender ? ` to ${d.sender}` : ""}? It can't be unsent.`)) return;
+    setBusy(true, state.sending.reasonUnavailable ? "Approving…" : "Sending…");
+    try {
+      const res = await api(`/api/drafts/${d.id}/approve`, { text: textarea.value });
+      justDecided.add(d.id);
+      const copied = res.status === "approved" ? await copy(res.text) : false;
+      const url = safeUrl(res.url);
+      card.replaceChildren(
+        h("h2", {}, d.subject || "(no subject)"),
+        senderLine(d),
+        h("div", { class: "done-panel" },
+          res.status === "sent" ? (res.warning ? "Marked as sent." : "Sent through Jelly.") : copied ? "Approved and copied. Paste it into the reply box in Jelly." : "Approved. Click “Copy reply” and paste it into the reply box in Jelly.",
+          res.warning ? h("div", { class: "small" }, res.warning) : null),
+        h("div", { class: "actions" },
+          url ? h("a", { class: "btn primary", href: url, target: "_blank", rel: "noopener noreferrer" }, "Open in Jelly ↗") : null,
+          res.status === "approved" ? h("button", { class: "btn", type: "button", onclick: async (e) => {
+            e.target.textContent = (await copy(res.text)) ? "Copied" : "Couldn't copy";
+          } }, copied ? "Copy again" : "Copy reply") : null,
+          h("button", { class: "btn quiet", type: "button", onclick: () => { justDecided.delete(d.id); render(); } }, "Dismiss")),
+      );
+      refresh();
+    } catch (e) {
+      setBusy(false);
+      error.textContent = e.message;
+      refresh();
+    }
+  });
+
+  const redoInput = h("input", { type: "text", placeholder: "What should change? e.g. shorter, mention the deadline (optional)" });
+  const redoRow = h("div", { class: "redo", hidden: true },
+    redoInput,
+    h("button", { class: "btn", type: "button", onclick: async () => {
+      error.textContent = "";
+      setBusy(true, "Redrafting… this takes a few seconds");
+      try {
+        await api(`/api/drafts/${d.id}/redo`, { instructions: redoInput.value, text: textarea.value });
+        cards.delete(d.id);
+        await refresh();
+      } catch (e) {
+        setBusy(false);
+        error.textContent = e.message;
+      }
+    } }, "Redraft"));
+  redoInput.addEventListener("keydown", (e) => { if (e.key === "Enter") redoRow.querySelector("button").click(); });
+
+  const discard = h("button", { class: "btn quiet", type: "button" }, "Discard");
+  discard.addEventListener("click", async () => {
+    if (!confirm("Discard this draft? The email stays unanswered in Jelly and won't be drafted again.")) return;
+    setBusy(true, "Discarding…");
+    try {
+      await api(`/api/drafts/${d.id}/discard`, {});
+      cards.delete(d.id);
+      await refresh();
+    } catch (e) {
+      setBusy(false);
+      error.textContent = e.message;
+    }
+  });
+
+  card.append(...[
+    h("h2", {}, d.subject || "(no subject)"),
+    senderLine(d),
+    chipsFor(d),
+    d.flags.length ? h("ul", { class: "details" }, d.flags.map((f) => h("li", {}, f.detail))) : null,
+    d.note ? h("p", { class: "note" }, d.note) : null,
+    threadView(d),
+    textarea,
+    h("div", { class: "actions" },
+      approve,
+      h("button", { class: "btn", type: "button", onclick: () => { redoRow.hidden = !redoRow.hidden; if (!redoRow.hidden) redoInput.focus(); } }, "Redo…"),
+      discard,
+      status),
+    redoRow,
+    error,
+  ].filter(Boolean));
+  return card;
+}
+
+function isDirty(entry) {
+  const ta = entry.el.querySelector("textarea");
+  return ta && ta.value !== ta.dataset.original;
+}
+
+function renderReview() {
+  const section = document.getElementById("review");
+  const pending = state.drafts;
+  const ids = new Set(pending.map((d) => d.id));
+  for (const [id, entry] of cards) {
+    if (!ids.has(id) && !justDecided.has(id)) { entry.el.remove(); cards.delete(id); }
+  }
+  for (const d of pending) {
+    const entry = cards.get(d.id);
+    if (!entry || (entry.updatedAt !== d.updatedAt && !isDirty(entry))) {
+      const el = draftCard(d);
+      if (entry) entry.el.replaceWith(el);
+      cards.set(d.id, { el, updatedAt: d.updatedAt });
+    }
+  }
+  const order = [...cards.values()].map((c) => c.el);
+  section.replaceChildren(...order);
+  if (order.length === 0) {
+    section.append(h("div", { class: "empty" },
+      state.scan.running ? "Drafting replies… they'll show up here as they're ready." : "Nothing to review. Click “Check inbox” to look for unanswered emails."));
+  }
+}
+
+function renderDone() {
+  const section = document.getElementById("done");
+  if (state.done.length === 0) return section.replaceChildren(h("div", { class: "empty" }, "Nothing approved or discarded yet."));
+  const label = { approved: "Approved", sent: "Sent", discarded: "Discarded", stale: "Out of date" };
+  section.replaceChildren(h("div", { class: "card" }, state.done.map((d) => {
+    const url = safeUrl(d.conversationUrl);
+    return h("div", { class: "row" },
+      h("div", { class: "title" }, d.subject || "(no subject)"),
+      h("div", { class: "meta" },
+        h("span", {}, label[d.status] || d.status),
+        d.statusReason ? h("span", {}, `· ${d.statusReason}`) : null,
+        h("span", {}, `· ${d.sender ? `${d.sender} · ` : ""}${ago(d.updatedAt)}`),
+        url ? h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, "· Open in Jelly ↗") : null),
+      d.finalText ? h("details", { class: "final" }, h("summary", {}, "Reply"),
+        h("pre", {}, d.finalText),
+        h("button", { class: "btn quiet small", type: "button", onclick: async (e) => {
+          e.target.textContent = (await copy(d.finalText)) ? "Copied" : "Couldn't copy";
+        } }, "Copy")) : null);
+  })));
+}
+
+function renderSkipped() {
+  const section = document.getElementById("skipped");
+  if (state.skipped.length === 0) return section.replaceChildren(h("div", { class: "empty" }, "Nothing skipped."));
+  section.replaceChildren(
+    h("p", { class: "muted small" },
+      "No draft was written for these: automated mail (auto-replies, bounces, reactions, newsletters) and emails the drafter judged don't need an answer. Use “Draft anyway” if it got one wrong."),
+    h("div", { class: "card" }, state.skipped.map((s) => {
+      const error = h("div", { class: "error", role: "alert" });
+      const btn = h("button", { class: "btn small", type: "button" }, "Draft anyway");
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Drafting…";
+        error.textContent = "";
+        try {
+          await api(`/api/skipped/${encodeURIComponent(s.messageId)}/draft`, {});
+          await refresh();
+          document.querySelector('[data-tab="review"]').click();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "Draft anyway";
+          error.textContent = e.message;
+        }
+      });
+      return h("div", { class: "row" },
+        h("div", { class: "title" }, s.subject || "(no subject)"),
+        h("div", { class: "meta" }, h("span", {}, `${s.sender ? `${s.sender} · ` : ""}${ago(s.at)}`)),
+        h("div", { class: "small muted" }, s.reason),
+        h("div", { class: "actions" }, btn),
+        error);
+    })));
+}
+
+function renderHeader() {
+  const { scan, sending } = state;
+  document.getElementById("nReview").textContent = `(${state.drafts.length})`;
+  document.getElementById("nDone").textContent = `(${state.done.length})`;
+  document.getElementById("nSkipped").textContent = `(${state.skipped.length})`;
+  document.getElementById("summary").textContent = state.drafts.length
+    ? `${state.drafts.length} draft${state.drafts.length === 1 ? "" : "s"} waiting` : "";
+  const scanBtn = document.getElementById("scan");
+  scanBtn.disabled = scan.running;
+  scanBtn.textContent = scan.running ? "Checking…" : "Check inbox";
+
+  const banner = document.getElementById("scanBanner");
+  const p = scan.progress;
+  banner.hidden = !scan.running && !(p && p.errors.length);
+  if (p) {
+    document.getElementById("scanText").textContent =
+      p.message + (p.errors.length ? ` ${p.errors.length} conversation(s) failed; they'll be retried next time.` : "");
+    const pct = p.conversations ? Math.round((p.processed / p.conversations) * 100) : (scan.running ? 5 : 100);
+    document.getElementById("scanBar").style.width = `${pct}%`;
+  } else {
+    document.getElementById("scanText").textContent = "Starting…";
+  }
+  const sendBanner = document.getElementById("sendBanner");
+  sendBanner.hidden = !sending.reasonUnavailable;
+  sendBanner.textContent = sending.reasonUnavailable || "";
+  const err = document.getElementById("errorBanner");
+  err.hidden = !scan.error;
+  err.textContent = scan.error ? `The last check failed: ${scan.error}` : "";
+}
+
+function render() {
+  if (!state) return;
+  renderHeader();
+  renderReview();
+  renderDone();
+  renderSkipped();
+}
+
+async function refresh() {
+  try {
+    state = await api("/api/state");
+    render();
+  } catch (e) {
+    const err = document.getElementById("errorBanner");
+    err.hidden = false;
+    err.textContent = `Can't reach the pudding server (${e.message}). Is it still running?`;
+  }
+  clearTimeout(pollTimer);
+  if (state && state.scan.running) pollTimer = setTimeout(refresh, 2000);
+}
+
+document.getElementById("scan").addEventListener("click", async () => {
+  await api("/api/scan", {}).catch((e) => alert(e.message));
+  refresh();
+});
+document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+  for (const id of ["review", "done", "skipped"]) document.getElementById(id).hidden = id !== btn.dataset.tab;
+}));
+refresh();
+</script>
+</body>
+</html>

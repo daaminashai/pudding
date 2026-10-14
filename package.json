@@ -1,0 +1,34 @@
+{
+  "name": "pudding",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drafts human-sounding replies to unanswered Jelly emails for review and approval in a local dashboard.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "scan": "tsx src/index.ts --scan-only",
+    "inspect": "tsx src/inspect.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "capture": "tsx src/capture.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.7",
+    "node-html-parser": "^9.0.4",
+    "openai": "^7.32.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}
