@@ -1,5 +1,5 @@
 import { CircleAlert, Inbox, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { api } from "@/api";
 import { ConfirmationsPanel } from "@/components/ConfirmationsPanel";
@@ -8,6 +8,7 @@ import { DoneList } from "@/components/DoneList";
 import { DraftCard } from "@/components/DraftCard";
 import { EmptyState } from "@/components/EmptyState";
 import { Hint } from "@/components/Hint";
+import { ReviewToolbar } from "@/components/ReviewToolbar";
 import { SkippedList } from "@/components/SkippedList";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,12 @@ export function App() {
   const [tab, setTab] = useState("review");
   // Approved cards stay in place (with what to do next) until dismissed.
   const [decided, setDecided] = useState<Map<number, Decided>>(new Map());
+  // Drafts ticked for a bulk action, and what each card's reply box says right now.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const texts = useRef(new Map<number, string>());
+  const onTextChange = useCallback((id: number, text: string) => {
+    texts.current.set(id, text);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -60,6 +67,17 @@ export function App() {
     const done = [...decided.values()].map((d) => ({ draft: d.draft, decided: d }));
     return [...pending, ...done].sort((a, b) => a.draft.receivedAt.localeCompare(b.draft.receivedAt));
   }, [snap, decided]);
+
+  // Replies in a bulk send that haven't had their turn yet are locked.
+  const bulk = snap?.bulk ?? null;
+  const waiting = useMemo(
+    () => new Set(bulk?.running && bulk.kind === "reply" ? bulk.ids.slice(bulk.processed) : []),
+    [bulk],
+  );
+  const selectable = useMemo(
+    () => review.filter((r) => !r.decided && !waiting.has(r.draft.id)).map((r) => r.draft),
+    [review, waiting],
+  );
 
   async function checkInbox() {
     try {
@@ -171,6 +189,16 @@ export function App() {
               </TabsList>
 
               <TabsContent value="review" className="space-y-4">
+                <ReviewToolbar
+                  drafts={selectable}
+                  selected={selected}
+                  onSelectedChange={setSelected}
+                  textOf={(d) => texts.current.get(d.id) ?? d.draft}
+                  bulk={bulk}
+                  gapSeconds={snap.bulkGapSeconds}
+                  sendingUnavailable={snap.sending.reasonUnavailable}
+                  onChanged={() => void refresh()}
+                />
                 {review.length === 0 ? (
                   running ? (
                     <EmptyState icon={LoaderCircle} title="Drafting replies…">
@@ -202,6 +230,17 @@ export function App() {
                         key={draft.id}
                         draft={draft}
                         sendingUnavailable={snap.sending.reasonUnavailable}
+                        selected={selected.has(draft.id) && !waiting.has(draft.id)}
+                        onSelectedChange={(v) =>
+                          setSelected((s) => {
+                            const next = new Set(s);
+                            if (v) next.add(draft.id);
+                            else next.delete(draft.id);
+                            return next;
+                          })
+                        }
+                        bulk={waiting.has(draft.id) ? (bulk?.current === draft.id ? "sending" : "queued") : null}
+                        onTextChange={onTextChange}
                         onApproved={approved}
                         onChanged={() => void refresh()}
                       />

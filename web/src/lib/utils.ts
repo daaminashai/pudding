@@ -24,6 +24,11 @@ export function plural(n: number, word: string, many = `${word}s`): string {
   return `${n} ${n === 1 ? word : many}`;
 }
 
+export function duration(seconds: number): string {
+  if (seconds < 90) return `about ${Math.max(1, Math.round(seconds))} seconds`;
+  return `about ${Math.round(seconds / 60)} minutes`;
+}
+
 export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);

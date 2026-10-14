@@ -60,6 +60,9 @@ export interface ScanProgress {
 }
 
 export interface BulkStatus {
+  kind: DraftKind;
+  /** Every draft in the run, in sending order. */
+  ids: number[];
   running: boolean;
   total: number;
   processed: number;
@@ -87,4 +90,10 @@ export interface ApproveResult {
   text: string;
   url: string | null;
   warning: string | null;
+}
+
+export interface DiscardResult {
+  discarded: number;
+  /** Drafts left alone because they were being sent or rewritten. */
+  failed: Array<{ id: number; subject: string; error: string }>;
 }

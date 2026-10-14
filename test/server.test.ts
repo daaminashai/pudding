@@ -57,6 +57,15 @@ async function setup(conversations = [fixtures.clean()], sender: Sender = new Ma
   return { ...ctx, dashboard, port, call, draft: draft! };
 }
 
+async function untilDone(call: (path: string) => Promise<Response>) {
+  for (let i = 0; i < 200; i++) {
+    const state = await (await call("/api/state")).json();
+    if (state.bulk && !state.bulk.running) return state;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error("bulk send didn't finish");
+}
+
 describe("dashboard API", () => {
   it("serves the page with the session token", async () => {
     const { call, dashboard } = await setup();
@@ -188,15 +197,6 @@ describe("confirmations", () => {
       }),
     );
 
-  async function untilDone(call: (path: string) => Promise<Response>) {
-    for (let i = 0; i < 200; i++) {
-      const state = await (await call("/api/state")).json();
-      if (state.bulk && !state.bulk.running) return state;
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    throw new Error("bulk send didn't finish");
-  }
-
   it("lists confirmations apart from drafts to review", async () => {
     const { call } = await setup([...foods(), fixtures.clean()]);
     const state = await (await call("/api/state")).json();
@@ -258,7 +258,7 @@ describe("confirmations", () => {
     const { call, ctxState } = await setupWith(sender, 200);
     await call("/api/confirmations/send", { ids: ctxState.pendingDrafts("confirmation").map((d) => d.id) });
     await new Promise((r) => setTimeout(r, 50));
-    await call("/api/confirmations/stop", {});
+    await call("/api/bulk/stop", {});
     const state = await untilDone(call);
     expect(sender.sent).toHaveLength(1);
     expect(state.bulk.stoppedReason).toMatch(/Stopped/);
@@ -355,4 +355,122 @@ describe("confirmations", () => {
     const ctx = await setup(foods(), sender, gapMs);
     return { ...ctx, ctxState: ctx.state };
   }
+});
+
+describe("bulk actions in To review", () => {
+  const questions = () =>
+    ["Ada", "Grace", "Linus"].map((name, i) =>
+      conversation({
+        id: `cnv_${name.toLowerCase()}`,
+        subject: `Question from ${name}`,
+        messages: [{ id: `msg_${name.toLowerCase()}`, text: `When do applications open?`, minutesAgo: 30 - i }],
+      }),
+    );
+
+  async function setupReplies(gapMs = 0) {
+    const sender = new FakeSender();
+    const ctx = await setup(questions(), sender, gapMs);
+    return { ...ctx, sender, ids: ctx.state.pendingDrafts("reply").map((d) => d.id) };
+  }
+
+  it("sends the selected replies one at a time, with any edits", async () => {
+    const { call, sender, state, ids } = await setupReplies(40);
+    const [a, b, c] = ids;
+    const res = await call("/api/drafts/send", { drafts: [{ id: a, text: "  march 3!  " }, { id: c, text: "hey! applications open march 3." }] });
+    expect(res.status).toBe(202);
+    expect((await res.json()).bulk).toMatchObject({ kind: "reply", ids: [a, c], running: true });
+    const done = await untilDone(call);
+    expect(done.bulk).toMatchObject({ total: 2, sent: 2, failed: [], stoppedReason: null });
+    expect(sender.sent.map((s) => [s.id, s.text])).toEqual([
+      [a, "march 3!"],
+      [c, "hey! applications open march 3."],
+    ]);
+    expect(sender.sent[1]!.at - sender.sent[0]!.at).toBeGreaterThanOrEqual(35);
+    expect(state.getDraft(a!)).toMatchObject({ status: "sent", finalText: "march 3!" });
+    expect(state.pendingDrafts("reply").map((d) => d.id)).toEqual([b]);
+    // Like a single approval, the sent replies teach later drafts.
+    expect(state.approvedExamples(5).map((e) => e.reply)).toContain("march 3!");
+  });
+
+  it("refuses an empty reply, and doesn't start", async () => {
+    const { call, sender, ids } = await setupReplies();
+    const res = await call("/api/drafts/send", { drafts: [{ id: ids[0], text: "hi" }, { id: ids[1], text: "   " }] });
+    expect(res.status).toBe(400);
+    expect((await call("/api/state").then((r) => r.json())).bulk).toBeNull();
+    expect(sender.sent).toEqual([]);
+  });
+
+  it("doesn't send a draft that was rewritten after the run started", async () => {
+    const { call, sender, state, drafter, ids } = await setupReplies(150);
+    const [a, b] = ids;
+    await call("/api/drafts/send", { drafts: [{ id: a, text: "one" }, { id: b, text: "two" }] });
+    await new Promise((r) => setTimeout(r, 50)); // the first is sent; the run is waiting
+    drafter.respond = () => ({ replyNeeded: true, reply: "a fresh draft", confidence: 0.9, needsHuman: false, note: "" });
+    expect((await call(`/api/drafts/${b}/redo`, { instructions: "" })).status).toBe(200);
+    const done = await untilDone(call);
+    expect(sender.sent.map((s) => s.id)).toEqual([a]);
+    expect(done.bulk.failed).toEqual([expect.objectContaining({ id: b, error: expect.stringMatching(/rewritten/) })]);
+    expect(state.getDraft(b!)).toMatchObject({ status: "pending", draft: "a fresh draft" });
+  });
+
+  it("only sends replies, never a confirmation slipped into the list", async () => {
+    const confirmation = conversation({
+      id: "cnv_bela",
+      subject: "Re: Bela: Haven + Framework 12",
+      messages: [{ id: "msg_bela", text: "Pizza" }],
+    });
+    const sender = new FakeSender();
+    const { call, state } = await setup([...questions(), confirmation], sender);
+    const confirmationId = state.pendingDrafts("confirmation")[0]!.id;
+    await call("/api/drafts/send", { drafts: [{ id: confirmationId, text: "hi" }] });
+    await untilDone(call);
+    expect(sender.sent).toEqual([]);
+    expect(state.getDraft(confirmationId)!.status).toBe("pending");
+  });
+
+  it("runs one bulk send at a time, whatever the kind", async () => {
+    const { call, ids } = await setupReplies(200);
+    expect((await call("/api/drafts/send", { drafts: [{ id: ids[0], text: "a" }, { id: ids[1], text: "b" }] })).status).toBe(202);
+    const second = await call("/api/confirmations/send", { ids: [ids[2]] });
+    expect(second.status).toBe(409);
+    expect((await second.json()).error).toMatch(/already running/);
+    await call("/api/bulk/stop", {});
+    expect((await untilDone(call)).bulk.stoppedReason).toMatch(/Stopped/);
+  });
+
+  it("refuses bulk sending when replies can't be sent through Jelly", async () => {
+    const { call, state } = await setup(questions());
+    const id = state.pendingDrafts("reply")[0]!.id;
+    const res = await call("/api/drafts/send", { drafts: [{ id, text: "hi" }] });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/needs sending through Jelly/);
+  });
+
+  it("discards several drafts at once, leaving one that's being sent", async () => {
+    const sender = new FakeSender();
+    let open!: () => void;
+    sender.gate = new Promise((r) => (open = r));
+    const { call, state } = await setup(questions(), sender);
+    const [a, b, c] = state.pendingDrafts("reply").map((d) => d.id);
+    state.setStatus(c!, "stale", "a newer message arrived");
+    const approving = call(`/api/drafts/${b}/approve`, { text: "hi" });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await call("/api/drafts/discard", { ids: [a, b, c] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      discarded: 1,
+      failed: [{ id: b, subject: "Question from Grace", error: "This draft is being sent right now." }],
+    });
+    expect(state.getDraft(a!)!.status).toBe("discarded");
+    expect(state.getDraft(c!)!.status).toBe("stale");
+    open();
+    expect((await approving).status).toBe(200);
+    expect(state.getDraft(b!)!.status).toBe("sent");
+  });
+
+  it("refuses a bulk discard with nothing selected", async () => {
+    const { call } = await setupReplies();
+    expect((await call("/api/drafts/discard", { ids: [] })).status).toBe(400);
+  });
 });
