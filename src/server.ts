@@ -36,6 +36,10 @@ type ApproveOutcome =
   | { ok: false; httpStatus: number; error: string; stopBatch: boolean; gone?: boolean };
 
 interface BulkStatus {
+  /** Confirmations (one fixed reply) or replies from To review. */
+  kind: DraftKind;
+  /** Every draft in the run, so the dashboard can lock the ones still waiting. */
+  ids: number[];
   running: boolean;
   total: number;
   processed: number;
@@ -49,6 +53,14 @@ interface BulkStatus {
 }
 
 const MAX_BULK = 500;
+
+interface BulkItem {
+  id: number;
+  /** The reply as shown (and maybe edited) in the dashboard; the draft's own text when absent. */
+  text?: string;
+  /** The draft's text when the run started. If it's rewritten before its turn, it isn't sent. */
+  drafted?: string;
+}
 
 interface ScanStatus {
   running: boolean;
@@ -177,8 +189,12 @@ export class Dashboard {
       return send(res, 202, this.snapshot());
     }
 
-    if (req.method === "POST" && url.pathname === "/api/confirmations/send") return this.startBulk(res, await readJson(req));
-    if (req.method === "POST" && url.pathname === "/api/confirmations/stop") {
+    if (req.method === "POST" && url.pathname === "/api/confirmations/send") {
+      return this.startBulk(res, "confirmation", await readJson(req));
+    }
+    if (req.method === "POST" && url.pathname === "/api/drafts/send") return this.startBulk(res, "reply", await readJson(req));
+    if (req.method === "POST" && url.pathname === "/api/drafts/discard") return this.discardMany(res, await readJson(req));
+    if (req.method === "POST" && url.pathname === "/api/bulk/stop") {
       this.bulkStop = true;
       return send(res, 200, this.snapshot());
     }
@@ -250,7 +266,7 @@ export class Dashboard {
    */
   private async approveDraft(
     id: number,
-    o: { text?: string; kind?: DraftKind; bulk?: boolean },
+    o: { text?: string; kind?: DraftKind; bulk?: boolean; unchangedFrom?: string },
   ): Promise<ApproveOutcome> {
     const { state, marmalade, config, sender } = this.deps;
     // A double click, the same draft in a bulk run and approved by hand, or one being rewritten: only one at a time.
@@ -262,6 +278,14 @@ export class Dashboard {
       const draft = state.getDraft(id);
       if (!draft || draft.status !== "pending" || (o.kind && draft.kind !== o.kind)) {
         return { ok: false, httpStatus: 404, error: "no pending draft with that id", stopBatch: false, gone: true };
+      }
+      if (o.unchangedFrom !== undefined && draft.draft !== o.unchangedFrom) {
+        return {
+          ok: false,
+          httpStatus: 409,
+          error: "Not sent: it was rewritten after the bulk send started. Check the new draft and send it again.",
+          stopBatch: false,
+        };
       }
       const text = o.text ?? draft.draft;
       // The mirror lags, so this catches most but not all races; the Jelly send
@@ -343,22 +367,37 @@ export class Dashboard {
   }
 
   /**
-   * Sends the fixed reply to each selected confirmation, one at a time with a
-   * gap between sends so Jelly isn't hammered. Anything that suggests trouble
-   * (login gone, rate limit, an unclear outcome, sending switched off) stops
-   * the run; a conversation that changed is just skipped.
+   * Sends each selected draft (the fixed reply for confirmations; the reply as
+   * shown in the dashboard for To review) one at a time, with a gap between
+   * sends so Jelly isn't hammered. Anything that suggests trouble (login gone,
+   * rate limit, an unclear outcome, sending switched off) stops the run; a
+   * conversation that changed is just skipped. One run at a time, whatever the
+   * kind, since they share Jelly's rate limit.
    */
-  private startBulk(res: http.ServerResponse, body: Record<string, unknown>) {
+  private startBulk(res: http.ServerResponse, kind: DraftKind, body: Record<string, unknown>) {
     const reason = this.deps.sender.unavailableReason();
     if (reason) return send(res, 409, { error: `Bulk sending needs sending through Jelly. ${reason}` });
     if (this.bulk?.running) return send(res, 409, { error: "A bulk send is already running." });
-    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is number => Number.isInteger(x)) : [];
-    if (ids.length === 0) return send(res, 400, { error: "no confirmations selected" });
-    if (ids.length > MAX_BULK) return send(res, 400, { error: `send at most ${MAX_BULK} at a time` });
+    // Confirmations all get the same reply, so they come as ids; replies come with the text to send.
+    const items: BulkItem[] =
+      kind === "confirmation"
+        ? intIds(body.ids).map((id) => ({ id }))
+        : (Array.isArray(body.drafts) ? body.drafts : []).flatMap((x: unknown) => {
+            const d = x as { id?: unknown; text?: unknown } | null;
+            if (!d || !Number.isInteger(d.id)) return [];
+            return [{ id: d.id as number, text: typeof d.text === "string" ? d.text.trim() : undefined }];
+          });
+    if (items.length === 0) return send(res, 400, { error: `no ${kind === "reply" ? "drafts" : "confirmations"} selected` });
+    if (items.length > MAX_BULK) return send(res, 400, { error: `send at most ${MAX_BULK} at a time` });
+    if (items.some((i) => i.text === "")) return send(res, 400, { error: "one of the replies is empty" });
 
-    const unique = [...new Set(ids)];
+    const seen = new Set<number>();
+    const unique = items.filter((i) => !seen.has(i.id) && seen.add(i.id));
+    for (const item of unique) item.drafted = this.deps.state.getDraft(item.id)?.draft;
     this.bulkStop = false;
     this.bulk = {
+      kind,
+      ids: unique.map((i) => i.id),
       running: true,
       total: unique.length,
       processed: 0,
@@ -376,16 +415,16 @@ export class Dashboard {
     return send(res, 202, this.snapshot());
   }
 
-  private async runBulk(ids: number[]): Promise<void> {
+  private async runBulk(items: BulkItem[]): Promise<void> {
     const bulk = this.bulk!;
     const { state, sender } = this.deps;
     let lastAttempt = 0;
     // Sent, discarded or moved to To review since it was selected: skip it quietly.
     const gone = (id: number) => {
       const draft = state.getDraft(id);
-      return !draft || draft.status !== "pending" || draft.kind !== "confirmation";
+      return !draft || draft.status !== "pending" || draft.kind !== bulk.kind;
     };
-    for (const id of ids) {
+    for (const { id, text, drafted } of items) {
       if (gone(id)) {
         bulk.processed++;
         continue;
@@ -403,9 +442,9 @@ export class Dashboard {
       }
       bulk.current = id;
       lastAttempt = Date.now();
-      // approveDraft re-reads the draft, so a Discard or Full reply during the wait wins.
+      // approveDraft re-reads the draft, so a Discard, Rewrite or Full reply during the wait wins.
       const subject = state.getDraft(id)?.subject ?? "";
-      const outcome = await this.approveDraft(id, { kind: "confirmation", bulk: true });
+      const outcome = await this.approveDraft(id, { kind: bulk.kind, bulk: true, text, unchangedFrom: drafted });
       bulk.processed++;
       if (!outcome.ok && outcome.gone) continue;
       if (outcome.ok && outcome.status === "sent") bulk.sent++;
@@ -426,7 +465,12 @@ export class Dashboard {
       }
     }
     Object.assign(bulk, { running: false, current: null, finishedAt: new Date().toISOString() });
-    log.info("bulk send finished", { sent: bulk.sent, failed: bulk.failed.length, stopped: bulk.stoppedReason });
+    log.info("bulk send finished", {
+      kind: bulk.kind,
+      sent: bulk.sent,
+      failed: bulk.failed.length,
+      stopped: bulk.stoppedReason,
+    });
   }
 
   /** "Draft anyway" on a skipped email: forget the skip and draft it, skip checks off. */
@@ -449,12 +493,36 @@ export class Dashboard {
   }
 
   private discard(res: http.ServerResponse, id: number) {
-    const draft = this.deps.state.getDraft(id);
-    if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
-    const busy = this.busy.get(id);
-    if (busy) return send(res, 409, { error: `This draft is ${busy} right now.` });
-    this.deps.state.setStatus(id, "discarded", "discarded in dashboard");
+    const problem = this.discardDraft(id);
+    if (problem) return send(res, problem.httpStatus, { error: problem.error });
     return send(res, 200, { status: "discarded" });
+  }
+
+  /** Discards several drafts. Ones already decided are skipped; ones being sent or rewritten are left alone. */
+  private discardMany(res: http.ServerResponse, body: Record<string, unknown>) {
+    const unique = [...new Set(intIds(body.ids))];
+    if (unique.length === 0) return send(res, 400, { error: "no drafts selected" });
+    if (unique.length > MAX_BULK) return send(res, 400, { error: `discard at most ${MAX_BULK} at a time` });
+    let discarded = 0;
+    const failed: Array<{ id: number; subject: string; error: string }> = [];
+    for (const id of unique) {
+      const problem = this.discardDraft(id);
+      if (!problem) discarded++;
+      else if (problem.httpStatus !== 404) {
+        failed.push({ id, subject: this.deps.state.getDraft(id)?.subject ?? "", error: problem.error });
+      }
+    }
+    return send(res, 200, { discarded, failed });
+  }
+
+  /** Null once discarded; otherwise why it wasn't. */
+  private discardDraft(id: number): { httpStatus: number; error: string } | null {
+    const draft = this.deps.state.getDraft(id);
+    if (!draft || draft.status !== "pending") return { httpStatus: 404, error: "no pending draft with that id" };
+    const busy = this.busy.get(id);
+    if (busy) return { httpStatus: 409, error: `This draft is ${busy} right now.` };
+    this.deps.state.setStatus(id, "discarded", "discarded in dashboard");
+    return null;
   }
 
   /** Rewrites a draft; with `kind`, also moves it (a confirmation that needs a full reply). */
@@ -502,6 +570,10 @@ export class Dashboard {
     if (kind) state.setKind(id, kind);
     return send(res, 200, state.getDraft(id));
   }
+}
+
+function intIds(value: unknown): number[] {
+  return Array.isArray(value) ? value.filter((x): x is number => Number.isInteger(x)) : [];
 }
 
 function send(res: http.ServerResponse, status: number, body: unknown) {

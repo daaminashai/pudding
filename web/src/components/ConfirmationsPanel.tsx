@@ -1,7 +1,8 @@
-import { CircleCheck, LoaderCircle, MailCheck, Send, Square, Trash2, TriangleAlert, WandSparkles } from "lucide-react";
+import { LoaderCircle, MailCheck, Send, Trash2, WandSparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api";
+import { BulkProgress } from "@/components/BulkProgress";
 import { FlagBadge, JellyLink } from "@/components/DraftMeta";
 import { EmptyState } from "@/components/EmptyState";
 import { Hint } from "@/components/Hint";
@@ -18,8 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Progress } from "@/components/ui/progress";
-import { ago, plural } from "@/lib/utils";
+import { ago, duration, plural } from "@/lib/utils";
 import type { BulkStatus, Draft } from "@/types";
 
 /** "Re: Bela: Haven + Framework 12" → "Bela". */
@@ -30,11 +30,6 @@ function personName(d: Draft): string {
     .split(":")[0]
     ?.trim();
   return name || d.sender || "(no name)";
-}
-
-function duration(seconds: number): string {
-  if (seconds < 90) return `about ${Math.max(1, Math.round(seconds))} seconds`;
-  return `about ${Math.round(seconds / 60)} minutes`;
 }
 
 function Row({
@@ -128,73 +123,6 @@ function Row({
   );
 }
 
-function BulkProgress({ bulk, onDismiss }: { bulk: BulkStatus; onDismiss: () => void }) {
-  const [stopping, setStopping] = useState(false);
-  if (bulk.running) {
-    return (
-      <Card className="space-y-3 p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <LoaderCircle className="size-4 animate-spin" />
-            Sending {Math.min(bulk.processed + 1, bulk.total)} of {bulk.total}…
-          </div>
-          <Hint label="Stop after the reply that's going out right now. The rest stay here, unsent.">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={stopping}
-              onClick={async () => {
-                setStopping(true);
-                await api.stopConfirmations().catch((e) => toast.error((e as Error).message));
-              }}
-            >
-              <Square />
-              {stopping ? "Stopping…" : "Stop"}
-            </Button>
-          </Hint>
-        </div>
-        <Progress value={(bulk.processed / bulk.total) * 100} />
-        <p className="text-[13px] text-muted-foreground">
-          {plural(bulk.sent, "reply", "replies")} sent so far. They go out one at a time so Jelly doesn't rate-limit us;
-          you can leave this page open or come back.
-        </p>
-      </Card>
-    );
-  }
-  const problem = bulk.stoppedReason || bulk.failed.length > 0;
-  return (
-    <Card className="space-y-3 p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-2 text-sm">
-          {problem ? (
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          ) : (
-            <CircleCheck className="mt-0.5 size-4 shrink-0" />
-          )}
-          <div className="space-y-1">
-            <p className="font-medium">
-              Sent {bulk.sent} of {plural(bulk.total, "confirmation")}.
-            </p>
-            {bulk.stoppedReason && <p className="text-muted-foreground">{bulk.stoppedReason}</p>}
-          </div>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
-      {bulk.failed.length > 0 && (
-        <ul className="space-y-1 border-t pt-3 text-[13px] text-muted-foreground">
-          {bulk.failed.map((f) => (
-            <li key={f.id} className="break-words">
-              <span className="font-medium text-foreground">{f.subject}</span>: {f.error}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
 export function ConfirmationsPanel({
   confirmations,
   bulk,
@@ -216,10 +144,12 @@ export function ConfirmationsPanel({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const isSelected = (d: Draft) => overrides.get(d.id) ?? d.flags.length === 0;
   const selected = useMemo(() => confirmations.filter(isSelected), [confirmations, overrides]);
-  const running = bulk?.running ?? false;
+  const running = bulk?.running === true && bulk.kind === "confirmation";
+  // Replies from To review going out: one bulk send at a time, but the rest of this tab still works.
+  const sendingReplies = bulk?.running === true && bulk.kind !== "confirmation";
   const all = selected.length === confirmations.length;
   const reply = confirmations[0]?.draft ?? "";
-  const showBulk = bulk && (bulk.running || bulk.startedAt !== dismissed);
+  const showBulk = bulk?.kind === "confirmation" && (bulk.running || bulk.startedAt !== dismissed);
 
   async function send() {
     try {
@@ -268,6 +198,10 @@ export function ConfirmationsPanel({
               {sendingUnavailable ? (
                 <span className="text-[13px] text-muted-foreground">
                   Sending through Jelly is off, so these can't be sent in bulk.
+                </span>
+              ) : sendingReplies ? (
+                <span className="text-[13px] text-muted-foreground">
+                  Replies from To review are being sent. These can go once they're done.
                 </span>
               ) : (
                 <Hint

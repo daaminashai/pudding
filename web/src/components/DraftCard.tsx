@@ -1,4 +1,4 @@
-import { LoaderCircle, Send, Sparkles, Trash2, WandSparkles, Copy } from "lucide-react";
+import { Clock, LoaderCircle, Send, Sparkles, Trash2, WandSparkles, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api";
@@ -18,9 +18,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { copyText } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 import type { ApproveResult, Draft } from "@/types";
 
 type Busy = null | "sending" | "rewriting" | "discarding";
@@ -29,11 +30,27 @@ interface Props {
   draft: Draft;
   /** Null when approving sends through Jelly; otherwise approving copies the reply. */
   sendingUnavailable: string | null;
+  /** Ticked for a bulk action from the toolbar above the list. */
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
+  /** Part of a bulk send that's running: waiting its turn, or going out now. Locks the card. */
+  bulk: null | "queued" | "sending";
+  /** The reply as it stands in the box, so a bulk send sends what's shown here. */
+  onTextChange: (id: number, text: string) => void;
   onApproved: (draft: Draft, result: ApproveResult, copied: boolean) => void;
   onChanged: () => void;
 }
 
-export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: Props) {
+export function DraftCard({
+  draft,
+  sendingUnavailable,
+  selected,
+  onSelectedChange,
+  bulk,
+  onTextChange,
+  onApproved,
+  onChanged,
+}: Props) {
   const [text, setText] = useState(draft.draft);
   const serverText = useRef(draft.draft);
   const [busy, setBusy] = useState<Busy>(null);
@@ -51,6 +68,10 @@ export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: 
     setText((current) => (current === serverText.current ? draft.draft : current));
     serverText.current = draft.draft;
   }, [draft.draft]);
+
+  useEffect(() => {
+    onTextChange(draft.id, text);
+  }, [draft.id, text, onTextChange]);
 
   const edited = text !== draft.draft;
 
@@ -100,16 +121,25 @@ export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: 
     }
   }
 
-  const disabled = busy !== null;
+  const disabled = busy !== null || bulk !== null;
   return (
-    <Card className="overflow-hidden">
+    <Card className={cn("overflow-hidden transition-shadow", selected && "ring-2 ring-ring")}>
       <div className="space-y-4 p-5">
-        <header className="space-y-1.5">
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="text-base leading-snug font-semibold break-words">{draft.subject || "(no subject)"}</h2>
-            <ConfidenceBadge confidence={draft.confidence} />
+        <header className="flex items-start gap-3">
+          <Checkbox
+            className="mt-1"
+            checked={selected}
+            disabled={disabled}
+            onCheckedChange={(v) => onSelectedChange(v === true)}
+            aria-label={`Select “${draft.subject || "(no subject)"}”`}
+          />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-base leading-snug font-semibold break-words">{draft.subject || "(no subject)"}</h2>
+              <ConfidenceBadge confidence={draft.confidence} />
+            </div>
+            <SenderLine draft={draft} />
           </div>
-          <SenderLine draft={draft} />
         </header>
 
         {(draft.needsHuman || draft.flags.length > 0) && (
@@ -223,6 +253,12 @@ export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: 
             Discard
           </Button>
         </Hint>
+        {bulk && (
+          <span className="ml-auto flex items-center gap-1.5 text-sm text-muted-foreground">
+            {bulk === "sending" ? <LoaderCircle className="size-4 animate-spin" /> : <Clock className="size-4" />}
+            {bulk === "sending" ? "Sending…" : "Waiting to send"}
+          </span>
+        )}
       </footer>
 
       <AlertDialog open={confirmSend} onOpenChange={setConfirmSend}>

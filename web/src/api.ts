@@ -1,4 +1,4 @@
-import type { ApproveResult, Draft, Snapshot } from "./types";
+import type { ApproveResult, DiscardResult, Draft, Snapshot } from "./types";
 
 const TOKEN = document.querySelector<HTMLMetaElement>('meta[name="pudding-token"]')?.content ?? "";
 
@@ -22,7 +22,9 @@ export const api = {
     call<Draft>(`/api/drafts/${id}/redo`, { text, instructions }),
   fullReply: (id: number) => call<Draft>(`/api/drafts/${id}/full`, {}),
   sendConfirmations: (ids: number[]) => call<Snapshot>("/api/confirmations/send", { ids }),
-  stopConfirmations: () => call<Snapshot>("/api/confirmations/stop", {}),
+  sendDrafts: (drafts: Array<{ id: number; text: string }>) => call<Snapshot>("/api/drafts/send", { drafts }),
+  discardDrafts: (ids: number[]) => call<DiscardResult>("/api/drafts/discard", { ids }),
+  stopBulk: () => call<Snapshot>("/api/bulk/stop", {}),
   draftAnyway: (messageId: string) =>
     call<{ outcome: string }>(`/api/skipped/${encodeURIComponent(messageId)}/draft`, {}),
 };

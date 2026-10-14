@@ -20,6 +20,7 @@ questions, but it works for any Jelly inbox.
   it yourself.
 - **bulk confirmations**: sign-up confirmation replies ("my favorite food is pizza!") get collected in one tab and
   confirmed all at once.
+- **bulk actions**: tick drafts in To review to send or discard them together.
 - **careful by default**: it won't send if someone already replied, a teammate has a draft open, or the conversation
   changed. there's also a kill switch.
 
