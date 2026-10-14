@@ -1,6 +1,7 @@
 import { CircleCheck, Copy, TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { JellyLink, SenderLine } from "@/components/DraftMeta";
+import { Hint } from "@/components/Hint";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { copyText, safeUrl } from "@/lib/utils";
@@ -34,12 +35,18 @@ export function DecidedCard({
           <h2 className="text-base leading-snug font-semibold break-words">{draft.subject || "(no subject)"}</h2>
           <SenderLine draft={draft} />
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={onDismiss}>
-          <X />
-        </Button>
+        <Hint label="Hide this card. It's still listed in the Done tab.">
+          <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={onDismiss}>
+            <X />
+          </Button>
+        </Hint>
       </div>
       <div className="mt-4 flex items-start gap-2.5 rounded-lg bg-muted px-4 py-3 text-sm">
-        {result.warning ? <TriangleAlert className="mt-0.5 size-4 shrink-0" /> : <CircleCheck className="mt-0.5 size-4 shrink-0" />}
+        {result.warning ? (
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        ) : (
+          <CircleCheck className="mt-0.5 size-4 shrink-0" />
+        )}
         <div className="space-y-1">
           <p className="font-medium">{headline}</p>
           {result.warning && <p className="text-muted-foreground">{result.warning}</p>}
@@ -50,13 +57,15 @@ export function DecidedCard({
           <JellyLink url={result.url} className={buttonVariants({ variant: sent ? "outline" : "default" })} />
         )}
         {!sent && (
-          <Button
-            variant="outline"
-            onClick={async () => setCopyLabel((await copyText(result.text)) ? "Copied" : "Couldn't copy")}
-          >
-            <Copy />
-            {copyLabel}
-          </Button>
+          <Hint label="Copy the approved reply, to paste into the reply box in Jelly.">
+            <Button
+              variant="outline"
+              onClick={async () => setCopyLabel((await copyText(result.text)) ? "Copied" : "Couldn't copy")}
+            >
+              <Copy />
+              {copyLabel}
+            </Button>
+          </Hint>
         )}
       </div>
     </Card>

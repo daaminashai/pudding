@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { ConfidenceBadge, FlagBadge, NeedsHumanBadge, SenderLine, senderLabel } from "@/components/DraftMeta";
+import { Hint } from "@/components/Hint";
 import { Thread } from "@/components/Thread";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -174,10 +175,12 @@ export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: 
               disabled={disabled}
               autoFocus
             />
-            <Button type="submit" variant="secondary" disabled={disabled}>
-              {busy === "rewriting" ? <LoaderCircle className="animate-spin" /> : <WandSparkles />}
-              {busy === "rewriting" ? "Rewriting…" : "Rewrite"}
-            </Button>
+            <Hint label="Write a new draft with these instructions. Leave the box empty for a fresh attempt.">
+              <Button type="submit" variant="secondary" disabled={disabled}>
+                {busy === "rewriting" ? <LoaderCircle className="animate-spin" /> : <WandSparkles />}
+                {busy === "rewriting" ? "Rewriting…" : "Rewrite"}
+              </Button>
+            </Hint>
           </form>
         )}
 
@@ -189,28 +192,37 @@ export function DraftCard({ draft, sendingUnavailable, onApproved, onChanged }: 
       </div>
 
       <footer className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button
-          disabled={disabled || !text.trim()}
-          onClick={() => (sends ? setConfirmSend(true) : void approve())}
+        <Hint
+          label={
+            sends
+              ? "Send this reply to them through Jelly, from the shared inbox, and archive the conversation. You'll be asked to confirm first."
+              : "Mark this reply approved and copy it, so you can paste it into the conversation in Jelly yourself. Nothing is sent."
+          }
         >
-          {busy === "sending" ? <LoaderCircle className="animate-spin" /> : sends ? <Send /> : <Copy />}
-          {busy === "sending" ? (sends ? "Sending…" : "Approving…") : sends ? "Approve & send" : "Approve & copy"}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={disabled}
-          onClick={() => {
-            setRewriteOpen(!rewriteOpen);
-            if (!rewriteOpen) setTimeout(() => instructionsRef.current?.focus());
-          }}
-        >
-          <WandSparkles />
-          Rewrite
-        </Button>
-        <Button variant="ghost" disabled={disabled} onClick={() => setConfirmDiscard(true)}>
-          {busy === "discarding" ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-          Discard
-        </Button>
+          <Button disabled={disabled || !text.trim()} onClick={() => (sends ? setConfirmSend(true) : void approve())}>
+            {busy === "sending" ? <LoaderCircle className="animate-spin" /> : sends ? <Send /> : <Copy />}
+            {busy === "sending" ? (sends ? "Sending…" : "Approving…") : sends ? "Approve & send" : "Approve & copy"}
+          </Button>
+        </Hint>
+        <Hint label="Have the AI write this draft again. You can tell it what to change, like “shorter” or “mention the deadline”. Your edits in the box are its starting point.">
+          <Button
+            variant="outline"
+            disabled={disabled}
+            onClick={() => {
+              setRewriteOpen(!rewriteOpen);
+              if (!rewriteOpen) setTimeout(() => instructionsRef.current?.focus());
+            }}
+          >
+            <WandSparkles />
+            Rewrite
+          </Button>
+        </Hint>
+        <Hint label="Throw this draft away without sending anything. The email stays unanswered in Jelly, and Pudding won't draft it again unless they write back.">
+          <Button variant="ghost" disabled={disabled} onClick={() => setConfirmDiscard(true)}>
+            {busy === "discarding" ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+            Discard
+          </Button>
+        </Hint>
       </footer>
 
       <AlertDialog open={confirmSend} onOpenChange={setConfirmSend}>

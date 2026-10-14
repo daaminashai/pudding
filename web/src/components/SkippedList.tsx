@@ -3,6 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { EmptyState } from "@/components/EmptyState";
+import { Hint } from "@/components/Hint";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ago } from "@/lib/utils";
@@ -22,26 +23,28 @@ function Row({ item, onDrafted }: { item: Skipped; onDrafted: () => void }) {
         <div className="text-[13px] break-words text-muted-foreground">{item.reason}</div>
         {error && <div className="text-[13px] text-destructive">{error}</div>}
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          setError("");
-          try {
-            await api.draftAnyway(item.messageId);
-            toast("Drafted", { description: "It's in To review now." });
-            onDrafted();
-          } catch (e) {
-            setError((e as Error).message);
-            setBusy(false);
-          }
-        }}
-      >
-        {busy ? <LoaderCircle className="animate-spin" /> : <WandSparkles />}
-        {busy ? "Drafting…" : "Draft anyway"}
-      </Button>
+      <Hint label="Have the AI write a draft for this email anyway. It shows up in To review for you to check.">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              await api.draftAnyway(item.messageId);
+              toast("Drafted", { description: "It's in To review now." });
+              onDrafted();
+            } catch (e) {
+              setError((e as Error).message);
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? <LoaderCircle className="animate-spin" /> : <WandSparkles />}
+          {busy ? "Drafting…" : "Draft anyway"}
+        </Button>
+      </Hint>
     </div>
   );
 }

@@ -6,12 +6,14 @@ import { DecidedCard } from "@/components/DecidedCard";
 import { DoneList } from "@/components/DoneList";
 import { DraftCard } from "@/components/DraftCard";
 import { EmptyState } from "@/components/EmptyState";
+import { Hint } from "@/components/Hint";
 import { SkippedList } from "@/components/SkippedList";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ago, plural } from "@/lib/utils";
 import type { ApproveResult, Draft, Snapshot } from "@/types";
 
@@ -76,136 +78,147 @@ export function App() {
   const pending = snap?.drafts.length ?? 0;
 
   return (
-    <div className="min-h-dvh">
-      <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-[860px] items-center gap-3 px-4">
-          <div className="flex items-center gap-2.5">
-            <div className="grid size-7 place-items-center rounded-lg bg-foreground text-background">
-              <Inbox className="size-4" />
+    <TooltipProvider>
+      <div className="min-h-dvh">
+        <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
+          <div className="mx-auto flex h-14 max-w-[860px] items-center gap-3 px-4">
+            <div className="flex items-center gap-2.5">
+              <div className="grid size-7 place-items-center rounded-lg bg-foreground text-background">
+                <Inbox className="size-4" />
+              </div>
+              <span className="font-semibold tracking-tight">Pudding</span>
             </div>
-            <span className="font-semibold tracking-tight">Pudding</span>
+            <span className="hidden truncate text-sm text-muted-foreground sm:inline">
+              {running
+                ? (progress?.message ?? "Starting…")
+                : snap?.scan.finishedAt
+                  ? `Checked ${ago(snap.scan.finishedAt)}${progress ? ` · ${progress.message}` : ""}`
+                  : ""}
+            </span>
+            <div className="flex-1" />
+            <Hint
+              side="bottom"
+              label="Look for emails that arrived since the last check and draft replies to them. Emails that already have a draft aren't drafted again."
+            >
+              <Button variant="outline" size="sm" onClick={() => void checkInbox()} disabled={!snap || running}>
+                <RefreshCw className={running ? "animate-spin" : undefined} />
+                {running ? "Checking…" : "Check inbox"}
+              </Button>
+            </Hint>
           </div>
-          <span className="hidden truncate text-sm text-muted-foreground sm:inline">
-            {running
-              ? progress?.message ?? "Starting…"
-              : snap?.scan.finishedAt
-                ? `Checked ${ago(snap.scan.finishedAt)}${progress ? ` · ${progress.message}` : ""}`
-                : ""}
-          </span>
-          <div className="flex-1" />
-          <Button variant="outline" size="sm" onClick={() => void checkInbox()} disabled={!snap || running}>
-            <RefreshCw className={running ? "animate-spin" : undefined} />
-            {running ? "Checking…" : "Check inbox"}
-          </Button>
-        </div>
-        {running && <Progress value={pct} className="h-0.5 rounded-none" />}
-      </header>
+          {running && <Progress value={pct} className="h-0.5 rounded-none" />}
+        </header>
 
-      <main className="mx-auto max-w-[860px] space-y-4 px-4 pt-6 pb-24">
-        {offline && (
-          <Alert variant="destructive">
-            <CircleAlert />
-            <AlertTitle>Can't reach the Pudding server</AlertTitle>
-            <AlertDescription>{offline}. Is it still running?</AlertDescription>
-          </Alert>
-        )}
-        {snap?.scan.error && (
-          <Alert variant="destructive">
-            <CircleAlert />
-            <AlertTitle>The last check failed</AlertTitle>
-            <AlertDescription>{snap.scan.error}</AlertDescription>
-          </Alert>
-        )}
-        {progress && progress.errors.length > 0 && (
-          <Alert>
-            <TriangleAlert />
-            <AlertTitle>{plural(progress.errors.length, "conversation")} couldn't be checked</AlertTitle>
-            <AlertDescription>They'll be tried again on the next check.</AlertDescription>
-          </Alert>
-        )}
-        {snap?.sending.reasonUnavailable && (
-          <Alert variant="muted">
-            <TriangleAlert />
-            <AlertDescription className="text-foreground">{snap.sending.reasonUnavailable}</AlertDescription>
-          </Alert>
-        )}
-        {running && (
-          <p className="text-sm text-muted-foreground sm:hidden">{progress?.message ?? "Starting…"}</p>
-        )}
+        <main className="mx-auto max-w-[860px] space-y-4 px-4 pt-6 pb-24">
+          {offline && (
+            <Alert variant="destructive">
+              <CircleAlert />
+              <AlertTitle>Can't reach the Pudding server</AlertTitle>
+              <AlertDescription>{offline}. Is it still running?</AlertDescription>
+            </Alert>
+          )}
+          {snap?.scan.error && (
+            <Alert variant="destructive">
+              <CircleAlert />
+              <AlertTitle>The last check failed</AlertTitle>
+              <AlertDescription>{snap.scan.error}</AlertDescription>
+            </Alert>
+          )}
+          {progress && progress.errors.length > 0 && (
+            <Alert>
+              <TriangleAlert />
+              <AlertTitle>{plural(progress.errors.length, "conversation")} couldn't be checked</AlertTitle>
+              <AlertDescription>They'll be tried again on the next check.</AlertDescription>
+            </Alert>
+          )}
+          {snap?.sending.reasonUnavailable && (
+            <Alert variant="muted">
+              <TriangleAlert />
+              <AlertDescription className="text-foreground">{snap.sending.reasonUnavailable}</AlertDescription>
+            </Alert>
+          )}
+          {running && <p className="text-sm text-muted-foreground sm:hidden">{progress?.message ?? "Starting…"}</p>}
 
-        {!snap ? (
-          <div className="space-y-4">
-            <Skeleton className="h-9 w-72" />
-            <Skeleton className="h-72 w-full rounded-xl" />
-            <Skeleton className="h-72 w-full rounded-xl" />
-          </div>
-        ) : (
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
-              <TabsTrigger value="review">
-                To review <Count n={pending} />
-              </TabsTrigger>
-              <TabsTrigger value="done">Done</TabsTrigger>
-              <TabsTrigger value="skipped">
-                Skipped <Count n={snap.skipped.length} />
-              </TabsTrigger>
-            </TabsList>
+          {!snap ? (
+            <div className="space-y-4">
+              <Skeleton className="h-9 w-72" />
+              <Skeleton className="h-72 w-full rounded-xl" />
+              <Skeleton className="h-72 w-full rounded-xl" />
+            </div>
+          ) : (
+            <Tabs value={tab} onValueChange={setTab}>
+              <TabsList>
+                <Hint label="Drafted replies waiting for you to approve, rewrite or discard.">
+                  <TabsTrigger value="review">
+                    To review <Count n={pending} />
+                  </TabsTrigger>
+                </Hint>
+                <Hint label="Replies you sent, approved or discarded, and drafts that went out of date.">
+                  <TabsTrigger value="done">Done</TabsTrigger>
+                </Hint>
+                <Hint label="Emails Pudding didn't draft a reply for: automated mail, and messages that don't need an answer.">
+                  <TabsTrigger value="skipped">
+                    Skipped <Count n={snap.skipped.length} />
+                  </TabsTrigger>
+                </Hint>
+              </TabsList>
 
-            <TabsContent value="review" className="space-y-4">
-              {review.length === 0 ? (
-                running ? (
-                  <EmptyState icon={LoaderCircle} title="Drafting replies…">
-                    They'll show up here as they're ready.
-                  </EmptyState>
-                ) : (
-                  <EmptyState icon={Inbox} title="You're all caught up">
-                    Nothing to review. Check the inbox to look for new emails.
-                  </EmptyState>
-                )
-              ) : (
-                review.map(({ draft, decided: d }) =>
-                  d ? (
-                    <DecidedCard
-                      key={draft.id}
-                      draft={draft}
-                      result={d.result}
-                      copied={d.copied}
-                      onDismiss={() =>
-                        setDecided((m) => {
-                          const next = new Map(m);
-                          next.delete(draft.id);
-                          return next;
-                        })
-                      }
-                    />
+              <TabsContent value="review" className="space-y-4">
+                {review.length === 0 ? (
+                  running ? (
+                    <EmptyState icon={LoaderCircle} title="Drafting replies…">
+                      They'll show up here as they're ready.
+                    </EmptyState>
                   ) : (
-                    <DraftCard
-                      key={draft.id}
-                      draft={draft}
-                      sendingUnavailable={snap.sending.reasonUnavailable}
-                      onApproved={approved}
-                      onChanged={() => void refresh()}
-                    />
-                  ),
-                )
-              )}
-            </TabsContent>
-            <TabsContent value="done">
-              <DoneList drafts={snap.done} />
-            </TabsContent>
-            <TabsContent value="skipped">
-              <SkippedList
-                items={snap.skipped}
-                onDrafted={() => {
-                  void refresh();
-                  setTab("review");
-                }}
-              />
-            </TabsContent>
-          </Tabs>
-        )}
-      </main>
-      <Toaster position="bottom-right" theme="system" />
-    </div>
+                    <EmptyState icon={Inbox} title="You're all caught up">
+                      Nothing to review. Check the inbox to look for new emails.
+                    </EmptyState>
+                  )
+                ) : (
+                  review.map(({ draft, decided: d }) =>
+                    d ? (
+                      <DecidedCard
+                        key={draft.id}
+                        draft={draft}
+                        result={d.result}
+                        copied={d.copied}
+                        onDismiss={() =>
+                          setDecided((m) => {
+                            const next = new Map(m);
+                            next.delete(draft.id);
+                            return next;
+                          })
+                        }
+                      />
+                    ) : (
+                      <DraftCard
+                        key={draft.id}
+                        draft={draft}
+                        sendingUnavailable={snap.sending.reasonUnavailable}
+                        onApproved={approved}
+                        onChanged={() => void refresh()}
+                      />
+                    ),
+                  )
+                )}
+              </TabsContent>
+              <TabsContent value="done">
+                <DoneList drafts={snap.done} />
+              </TabsContent>
+              <TabsContent value="skipped">
+                <SkippedList
+                  items={snap.skipped}
+                  onDrafted={() => {
+                    void refresh();
+                    setTab("review");
+                  }}
+                />
+              </TabsContent>
+            </Tabs>
+          )}
+        </main>
+        <Toaster position="bottom-right" theme="system" />
+      </div>
+    </TooltipProvider>
   );
 }

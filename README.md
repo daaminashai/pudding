@@ -81,6 +81,8 @@ an editable box, and badges for what to look at:
 | Has attachments | The sender attached files the drafter couldn't see |
 | Long thread | Many back-and-forths; worth reading the whole thread |
 
+Hover over (or tab to) any button, tab or badge to see what it does.
+
 - **Approve & copy** checks the conversation hasn't changed since the draft was written, saves your final text and
   copies it. If a newer message arrived or someone already replied, it refuses and marks the draft out of date.
 - **Rewrite** redrafts, optionally with instructions ("shorter", "mention the deadline", "say no politely").

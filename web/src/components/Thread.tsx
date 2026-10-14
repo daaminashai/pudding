@@ -28,7 +28,12 @@ function Entry({ entry }: { entry: ThreadEntry }) {
         {showQuote ? entry.text : fresh || <span className="text-muted-foreground italic">(no text)</span>}
       </div>
       {hasQuote && (
-        <Button variant="link" size="xs" className="mt-1 h-auto px-0 text-xs text-muted-foreground" onClick={() => setShowQuote(!showQuote)}>
+        <Button
+          variant="link"
+          size="xs"
+          className="mt-1 h-auto px-0 text-xs text-muted-foreground"
+          onClick={() => setShowQuote(!showQuote)}
+        >
           {showQuote ? "Hide quoted text" : "Show quoted text"}
         </Button>
       )}
