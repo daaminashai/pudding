@@ -1,0 +1,11 @@
+node_modules/
+.env
+
+# Drafts, learned examples and inspected conversations contain email content.
+data/
+STOP
+
+# Knowledge docs may be internal; keep only the scaffolding in git.
+knowledge/*
+!knowledge/_README.md
+!knowledge/_style.md
