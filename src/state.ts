@@ -212,12 +212,13 @@ export class State {
       .run(c.draft, c.confidence, c.needsHuman ? 1 : 0, c.note, JSON.stringify(c.flags), now.toISOString(), id);
   }
 
+  /** Decides a pending draft. A draft that's already decided keeps its first decision. */
   setStatus(id: number, status: DraftStatus, reason: string, finalText: string | null = null, now = new Date()): void {
     const at = now.toISOString();
     this.db
       .prepare(
         `UPDATE drafts SET status = ?, status_reason = ?, final_text = COALESCE(?, final_text), updated_at = ?,
-           decided_at = ? WHERE id = ?`,
+           decided_at = ? WHERE id = ? AND status = 'pending'`,
       )
       .run(status, reason, finalText, at, at, id);
   }

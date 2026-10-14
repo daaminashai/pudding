@@ -28,11 +28,33 @@ export function isConfirmationCandidate({ subject, thread, question }: Confirmat
   if (!question.trim()) return false;
   // Once the team has replied in the thread, the registration was confirmed already.
   if (thread.some((e) => e.kind === "outbound")) return false;
+  // A teammate left a note: a person is already looking at it.
+  if (thread.some((e) => e.kind === "note")) return false;
   const inbound = thread.filter((e) => e.kind === "inbound");
   const latest = inbound.at(-1);
   if (!latest) return false;
   const replySubject = REPLY_PREFIX.test(subject) && CONFIRMATION_SUBJECT.test(subject.replace(REPLY_PREFIX, ""));
   return replySubject || CONFIRMATION_ASK.test(latest.text);
+}
+
+/**
+ * Everything the person has written in the thread, oldest first, for the check:
+ * an earlier message may hold the question, and text below a quote counts too.
+ * Only the ">" lines (the quoted confirmation email, in most clients) are dropped.
+ */
+export function confirmationText(thread: ThreadEntry[]): string {
+  return thread
+    .filter((e) => e.kind === "inbound")
+    .map((e) =>
+      e.text
+        .split(/\r?\n/)
+        .filter((line) => !line.trimStart().startsWith(">"))
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim(),
+    )
+    .filter(Boolean)
+    .join("\n\n--- their next message ---\n\n");
 }
 
 export const ConfirmationCheckSchema = z.object({
@@ -50,8 +72,10 @@ export interface ConfirmationCheck {
 
 export const CONFIRMATION_INSTRUCTIONS = [
   "People who sign up for an event get an email asking them to reply with their favorite food to confirm their " +
-    "registration. You'll see one person's reply to that email, with the quoted email removed. Decide whether it " +
-    "needs a real answer from the team or just a standard \"your registration is confirmed\".",
+    "registration. You'll see what one person wrote back, oldest message first. Most of our quoted email is removed; " +
+    "ignore whatever is left of it (it starts with a line like \"On … wrote:\" or \"From:\"), but anything the " +
+    "person wrote, above or below it, in any of their messages, counts. Decide whether it needs a real answer from " +
+    "the team or just a standard \"your registration is confirmed\".",
   "",
   "only_confirmation is true when the reply is nothing more than that: a favorite food (any food, any language, " +
     "jokes are fine), maybe with a greeting, thanks, excitement, their name, a sign-off or an email signature.",
@@ -68,6 +92,6 @@ export const CONFIRMATION_INSTRUCTIONS = [
 ].join("\n");
 
 export function confirmationPrompt(subject: string, question: string): string {
-  const text = question.length > 4_000 ? `${question.slice(0, 4_000)}\n[…truncated]` : question;
+  const text = question.length > 8_000 ? `${question.slice(0, 8_000)}\n[…truncated]` : question;
   return `Subject: ${subject}\n\n<reply>\n${text.replace(/<\/?reply>/gi, "")}\n</reply>`;
 }

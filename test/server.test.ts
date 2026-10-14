@@ -296,6 +296,61 @@ describe("confirmations", () => {
     expect(state.pendingDrafts("reply").map((d) => d.id)).toEqual([id]);
   });
 
+  it("doesn't send one that was discarded while the run waited", async () => {
+    const sender = new FakeSender();
+    const { call, ctxState } = await setupWith(sender, 150);
+    const [first, second, third] = ctxState.pendingDrafts("confirmation").map((d) => d.id);
+    await call("/api/confirmations/send", { ids: [first, second, third] });
+    await new Promise((r) => setTimeout(r, 50)); // the first is sent; the run is waiting
+    expect((await call(`/api/drafts/${second}/discard`, {})).status).toBe(200);
+    const state = await untilDone(call);
+    expect(sender.sent.map((s) => s.id)).toEqual([first, third]);
+    expect(state.bulk).toMatchObject({ sent: 2, failed: [] });
+    expect(ctxState.getDraft(second!)!.status).toBe("discarded");
+  });
+
+  it("doesn't send one that's being rewritten as a full reply", async () => {
+    const sender = new FakeSender();
+    const { call, ctxState, drafter } = await setupWith(sender);
+    const [first, second] = ctxState.pendingDrafts("confirmation").map((d) => d.id);
+    let finish!: () => void;
+    const slow = new Promise<void>((r) => (finish = r));
+    const draft = drafter.draft.bind(drafter);
+    drafter.draft = async (req) => {
+      await slow;
+      return draft(req);
+    };
+    const full = call(`/api/drafts/${first}/full`, {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await call(`/api/drafts/${first}/approve`, { text: "hi" })).status).toBe(409);
+    await call("/api/confirmations/send", { ids: [first, second] });
+    const state = await untilDone(call);
+    expect(sender.sent.map((s) => s.id)).toEqual([second]);
+    expect(state.bulk.failed).toEqual([expect.objectContaining({ id: first, error: "This draft is being rewritten right now." })]);
+    finish();
+    expect(await (await full).json()).toMatchObject({ kind: "reply", status: "pending" });
+  });
+
+  it("leaves a confirmation queued if sending switches off mid-send", async () => {
+    const sender = new FakeSender();
+    // The kill switch flips between the run's check and the send itself.
+    sender.send = async () => ({ sent: false, message: "approved; copy it into Jelly" });
+    const { call, ctxState } = await setupWith(sender);
+    await call("/api/confirmations/send", { ids: ctxState.pendingDrafts("confirmation").map((d) => d.id) });
+    const state = await untilDone(call);
+    expect(state.bulk).toMatchObject({ sent: 0, processed: 1 });
+    expect(state.bulk.stoppedReason).toMatch(/switched off/);
+    expect(ctxState.pendingDrafts("confirmation")).toHaveLength(3);
+  });
+
+  it("keeps a draft's first decision", async () => {
+    const { ctxState } = await setupWith(new FakeSender());
+    const id = ctxState.pendingDrafts("confirmation")[0]!.id;
+    ctxState.setStatus(id, "sent", "sent through Jelly", "Thanks!");
+    ctxState.setStatus(id, "stale", "someone already replied in Jelly");
+    expect(ctxState.getDraft(id)).toMatchObject({ status: "sent", finalText: "Thanks!" });
+  });
+
   async function setupWith(sender: Sender, gapMs = 0) {
     const ctx = await setup(foods(), sender, gapMs);
     return { ...ctx, ctxState: ctx.state };

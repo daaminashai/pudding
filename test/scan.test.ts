@@ -114,6 +114,33 @@ describe("scan", () => {
     expect(state.pendingDrafts("reply")).toHaveLength(1);
   });
 
+  it("shows the check every message they sent, so an earlier question isn't missed", async () => {
+    const twice = conversation({
+      subject: "Re: Sam: Haven + Framework 12",
+      messages: [
+        { text: "can I bring my sister?", minutesAgo: 20 },
+        { text: "Pizza!", minutesAgo: 10 },
+      ],
+    });
+    const { deps, state, drafter } = scanDeps([twice]);
+    await scan(deps);
+    expect(drafter.confirmationChecks[0]!.question).toBe("can I bring my sister?\n\n--- their next message ---\n\nPizza!");
+    expect(state.pendingDrafts("confirmation")).toEqual([]);
+    expect(state.pendingDrafts("reply")).toHaveLength(1);
+  });
+
+  it("looks again when lastMessageAt is ahead of the messages Marmalade returned", async () => {
+    const c = fixtures.clean();
+    // A message that hasn't synced yet: the conversation says it's newer than anything in it.
+    const ahead = { ...c, lastMessageAt: new Date(Date.now() + 10 * 60_000).toISOString() };
+    const { deps, marmalade } = scanDeps([ahead]);
+    await scan(deps);
+    marmalade.requests.length = 0;
+    const { progress } = await scan(deps);
+    expect(progress.conversations).toBe(1);
+    expect(marmalade.requests.some((r) => r.url.pathname.endsWith(`/conversations/${c.id}`))).toBe(true);
+  });
+
   it("only checks unanswered replies to the confirmation email", async () => {
     const answered = conversation({
       subject: "Re: Zack: Haven + Framework 12",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isConfirmationCandidate } from "../src/confirmations.js";
+import { confirmationText, isConfirmationCandidate } from "../src/confirmations.js";
 import type { ThreadEntry } from "../src/thread.js";
 
 const QUOTED =
@@ -33,5 +33,24 @@ describe("isConfirmationCandidate", () => {
       isConfirmationCandidate({ subject, thread: [inbound("Pizza"), outbound("confirmed!"), inbound("thanks")], question: "thanks" }),
     ).toBe(false);
     expect(isConfirmationCandidate({ subject, thread: [inbound(QUOTED)], question: "  " })).toBe(false);
+  });
+});
+
+describe("confirmation checks", () => {
+  it("skip threads with a teammate's note", () => {
+    const note: ThreadEntry = { kind: "note", from: "teammate", at: "2026-10-10T18:00:00Z", text: "I'll take this" };
+    expect(
+      isConfirmationCandidate({ subject: "Re: Bela: Haven + Framework 12", thread: [inbound("Pizza"), note], question: "Pizza" }),
+    ).toBe(false);
+  });
+
+  it("see every message they sent, and text below the quote, without our quoted email", () => {
+    const text = confirmationText([
+      inbound("can I bring my sister?"),
+      inbound(`${QUOTED}\n\nalso is there parking`),
+    ]);
+    expect(text).toBe(
+      "can I bring my sister?\n\n--- their next message ---\n\nPizza\n\nOn Sat, 10 Oct 2026, Jolly Wang <haven@hackclub.com> wrote:\n\nalso is there parking",
+    );
   });
 });

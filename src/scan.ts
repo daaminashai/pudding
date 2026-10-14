@@ -11,6 +11,7 @@ import {
 } from "./guardrails.js";
 import { findAiTells } from "./humanize.js";
 import {
+  confirmationText,
   isConfirmationCandidate,
   type ConfirmationCheck,
   type ConfirmationInput,
@@ -22,7 +23,7 @@ import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from ".
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
 import type { DraftContent, DraftKind, State } from "./state.js";
-import { latestMessage, messageText, stripQuoted, toThread, type Thread } from "./thread.js";
+import { latestMessage, messageText, messageTime, stripQuoted, toThread, type Thread } from "./thread.js";
 
 export interface ScanDeps {
   config: Pick<
@@ -238,8 +239,13 @@ export async function processConversation(
 ): Promise<Outcome> {
   const conversation = await deps.marmalade.getConversation(deps.config.mailboxId, conversationId);
   const outcome = await handleConversation(deps, knowledge, conversation, options);
-  // Only once it's fully handled: anything that threw gets another go next scan.
-  deps.state.markChecked(conversation.id, normalizeTime(conversation.lastMessageAt));
+  // Only once it's fully handled: anything that threw gets another go next scan. And
+  // only if the newest message is here: if lastMessageAt is ahead of the messages
+  // Marmalade returned, one may not have synced yet, so look again next scan.
+  const newest = Math.max(0, ...conversation.messages.map((m) => Math.max(messageTime(m), Date.parse(m.createdAt) || 0)));
+  if (conversation.messages.length === 0 || Date.parse(conversation.lastMessageAt) - newest <= 60_000) {
+    deps.state.markChecked(conversation.id, normalizeTime(conversation.lastMessageAt));
+  }
   return outcome;
 }
 
@@ -335,7 +341,7 @@ async function handleConversation(
 export async function checkConfirmation(drafter: Drafter, input: ConfirmationInput): Promise<ConfirmationCheck | null> {
   if (!isConfirmationCandidate(input)) return null;
   try {
-    return await drafter.checkConfirmation(input.subject, input.question);
+    return await drafter.checkConfirmation(input.subject, confirmationText(input.thread));
   } catch (err) {
     if (err instanceof LlmError && (err.transient || err.fatal)) throw err;
     log.warn("couldn't check a confirmation reply; drafting it normally", { error: errorMessage(err) });

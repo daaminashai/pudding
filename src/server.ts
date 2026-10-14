@@ -33,7 +33,7 @@ export interface DashboardDeps extends ScanDeps {
 type ApproveOutcome =
   | { ok: true; status: "sent" | "approved"; text: string; url: string | null; warning: string | null }
   /** stopBatch: a bulk run should stop rather than try the next one. */
-  | { ok: false; httpStatus: number; error: string; stopBatch: boolean };
+  | { ok: false; httpStatus: number; error: string; stopBatch: boolean; gone?: boolean };
 
 interface BulkStatus {
   running: boolean;
@@ -92,8 +92,8 @@ export class Dashboard {
 
   private bulk: BulkStatus | null = null;
   private bulkStop = false;
-  /** Drafts being sent right now. */
-  private readonly inFlight = new Set<number>();
+  /** Drafts being sent or rewritten right now, and which; nothing else may touch them meanwhile. */
+  private readonly busy = new Map<number, "being sent" | "being rewritten">();
   private readonly webDir: string;
   private readonly bulkGapMs: number;
 
@@ -236,11 +236,9 @@ export class Dashboard {
   }
 
   private async approve(res: http.ServerResponse, id: number, body: Record<string, unknown>) {
-    const draft = this.deps.state.getDraft(id);
-    if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) return send(res, 400, { error: "the reply is empty" });
-    const outcome = await this.approveDraft(draft, text);
+    const outcome = await this.approveDraft(id, { text });
     if (!outcome.ok) return send(res, outcome.httpStatus, { error: outcome.error });
     const { ok: _ok, ...result } = outcome;
     return send(res, 200, result);
@@ -250,13 +248,22 @@ export class Dashboard {
    * Checks the conversation hasn't moved on, then sends (or, when sending is
    * off, records) the reply. Shared by the Approve button and bulk sending.
    */
-  private async approveDraft(draft: Draft, text: string): Promise<ApproveOutcome> {
+  private async approveDraft(
+    id: number,
+    o: { text?: string; kind?: DraftKind; bulk?: boolean },
+  ): Promise<ApproveOutcome> {
     const { state, marmalade, config, sender } = this.deps;
-    const id = draft.id;
-    // A double click, or the same draft in a bulk run and approved by hand: only one may send.
-    if (this.inFlight.has(id)) return { ok: false, httpStatus: 409, error: "This reply is already being sent.", stopBatch: false };
-    this.inFlight.add(id);
+    // A double click, the same draft in a bulk run and approved by hand, or one being rewritten: only one at a time.
+    const busy = this.busy.get(id);
+    if (busy) return { ok: false, httpStatus: 409, error: `This draft is ${busy} right now.`, stopBatch: false };
+    this.busy.set(id, "being sent");
     try {
+      // Read it now, while holding it: it may have been sent, discarded or rewritten since the caller looked.
+      const draft = state.getDraft(id);
+      if (!draft || draft.status !== "pending" || (o.kind && draft.kind !== o.kind)) {
+        return { ok: false, httpStatus: 404, error: "no pending draft with that id", stopBatch: false, gone: true };
+      }
+      const text = o.text ?? draft.draft;
       // The mirror lags, so this catches most but not all races; the Jelly send
       // flow will re-check against Jelly itself before sending.
       let warning: string | null = null;
@@ -324,10 +331,14 @@ export class Dashboard {
         }
         return { ok: false, httpStatus: 502, error: message.startsWith("Not sent") ? message : `Not sent: ${message}`, stopBatch: true };
       }
+      if (!result.sent && o.bulk) {
+        // Sending switched off (STOP file, kill switch) after the bulk run checked: leave it queued, unsent.
+        return { ok: false, httpStatus: 409, error: "Not sent: sending through Jelly switched off.", stopBatch: true };
+      }
       state.setStatus(id, result.sent ? "sent" : "approved", result.message, text);
       return { ok: true, status: result.sent ? "sent" : "approved", text, warning, url };
     } finally {
-      this.inFlight.delete(id);
+      this.busy.delete(id);
     }
   }
 
@@ -345,10 +356,11 @@ export class Dashboard {
     if (ids.length === 0) return send(res, 400, { error: "no confirmations selected" });
     if (ids.length > MAX_BULK) return send(res, 400, { error: `send at most ${MAX_BULK} at a time` });
 
+    const unique = [...new Set(ids)];
     this.bulkStop = false;
     this.bulk = {
       running: true,
-      total: ids.length,
+      total: unique.length,
       processed: 0,
       sent: 0,
       failed: [],
@@ -357,7 +369,7 @@ export class Dashboard {
       startedAt: new Date().toISOString(),
       finishedAt: null,
     };
-    void this.runBulk([...new Set(ids)]).catch((err) => {
+    void this.runBulk(unique).catch((err) => {
       log.error("bulk send failed", { error: errorMessage(err) });
       if (this.bulk) Object.assign(this.bulk, { running: false, current: null, stoppedReason: errorMessage(err) });
     });
@@ -368,10 +380,14 @@ export class Dashboard {
     const bulk = this.bulk!;
     const { state, sender } = this.deps;
     let lastAttempt = 0;
-    for (const id of ids) {
+    // Sent, discarded or moved to To review since it was selected: skip it quietly.
+    const gone = (id: number) => {
       const draft = state.getDraft(id);
-      if (!draft || draft.status !== "pending" || draft.kind !== "confirmation") {
-        bulk.processed++; // sent, discarded or moved since it was selected
+      return !draft || draft.status !== "pending" || draft.kind !== "confirmation";
+    };
+    for (const id of ids) {
+      if (gone(id)) {
+        bulk.processed++;
         continue;
       }
       const wait = lastAttempt + this.bulkGapMs - Date.now();
@@ -387,8 +403,11 @@ export class Dashboard {
       }
       bulk.current = id;
       lastAttempt = Date.now();
-      const outcome = await this.approveDraft(draft, draft.draft);
+      // approveDraft re-reads the draft, so a Discard or Full reply during the wait wins.
+      const subject = state.getDraft(id)?.subject ?? "";
+      const outcome = await this.approveDraft(id, { kind: "confirmation", bulk: true });
       bulk.processed++;
+      if (!outcome.ok && outcome.gone) continue;
       if (outcome.ok && outcome.status === "sent") bulk.sent++;
       if (outcome.ok && outcome.warning) {
         bulk.stoppedReason = `Stopped after an unclear send: ${outcome.warning}`;
@@ -399,7 +418,7 @@ export class Dashboard {
         break;
       }
       if (!outcome.ok) {
-        bulk.failed.push({ id, subject: draft.subject, error: outcome.error });
+        bulk.failed.push({ id, subject, error: outcome.error });
         if (outcome.stopBatch) {
           bulk.stoppedReason = `Stopped: ${outcome.error}`;
           break;
@@ -432,17 +451,31 @@ export class Dashboard {
   private discard(res: http.ServerResponse, id: number) {
     const draft = this.deps.state.getDraft(id);
     if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
-    if (this.inFlight.has(id)) return send(res, 409, { error: "This reply is being sent right now." });
+    const busy = this.busy.get(id);
+    if (busy) return send(res, 409, { error: `This draft is ${busy} right now.` });
     this.deps.state.setStatus(id, "discarded", "discarded in dashboard");
     return send(res, 200, { status: "discarded" });
   }
 
   /** Rewrites a draft; with `kind`, also moves it (a confirmation that needs a full reply). */
   private async redo(res: http.ServerResponse, id: number, body: Record<string, unknown>, kind?: DraftKind) {
-    const { state, drafter } = this.deps;
+    const { state } = this.deps;
     const draft = state.getDraft(id);
     if (!draft || draft.status !== "pending") return send(res, 404, { error: "no pending draft with that id" });
-    if (this.inFlight.has(id)) return send(res, 409, { error: "This reply is being sent right now." });
+    const busy = this.busy.get(id);
+    if (busy) return send(res, 409, { error: `This draft is ${busy} right now.` });
+    // Held for the whole model call, so a bulk run can't send the old text meanwhile.
+    this.busy.set(id, "being rewritten");
+    try {
+      return await this.rewrite(res, draft, body, kind);
+    } finally {
+      this.busy.delete(id);
+    }
+  }
+
+  private async rewrite(res: http.ServerResponse, draft: Draft, body: Record<string, unknown>, kind?: DraftKind) {
+    const { state, drafter } = this.deps;
+    const id = draft.id;
     const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
     const current = typeof body.text === "string" ? body.text : draft.draft;
 
