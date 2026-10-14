@@ -37,6 +37,8 @@ const EnvSchema = z.object({
   LEARN_MAX_EXAMPLES: intWithDefault(100, 0),
   LONG_THREAD_MESSAGES: intWithDefault(6, 1),
   DASHBOARD_PORT: intWithDefault(4545, 1, 65535),
+  // Seconds between replies when sending confirmations in bulk, so Jelly doesn't rate-limit us.
+  BULK_SEND_GAP_SECONDS: intWithDefault(3, 1, 600),
 
   // Link to a conversation in Jelly, with {id} for the conversation id. Used when Marmalade has no url.
   JELLY_CONVERSATION_URL: optionalString,
@@ -64,6 +66,7 @@ export interface Config {
   learnMaxExamples: number;
   longThreadMessages: number;
   dashboardPort: number;
+  bulkSendGapSeconds: number;
   mode: "shadow" | "send";
   killSwitch: boolean;
   jelly: { baseUrl: string; team: string; timezone: string; cookie?: string };
@@ -118,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, workDir = process.cwd()): Con
     learnMaxExamples: parsed.LEARN_MAX_EXAMPLES,
     longThreadMessages: parsed.LONG_THREAD_MESSAGES,
     dashboardPort: parsed.DASHBOARD_PORT,
+    bulkSendGapSeconds: parsed.BULK_SEND_GAP_SECONDS,
     mode: parsed.MODE,
     killSwitch: parsed.KILL_SWITCH,
     jelly: {

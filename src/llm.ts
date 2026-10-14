@@ -1,6 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
+import {
+  CONFIRMATION_INSTRUCTIONS,
+  ConfirmationCheckSchema,
+  confirmationPrompt,
+  type ConfirmationCheck,
+  type RawConfirmationCheck,
+} from "./confirmations.js";
 import { findAiTells } from "./humanize.js";
 import type { Knowledge } from "./knowledge.js";
 import type { Thread } from "./thread.js";
@@ -26,6 +33,8 @@ export interface DraftResult {
 
 export interface Drafter {
   draft(request: DraftRequest): Promise<DraftResult>;
+  /** A small, separate call: does this reply to the sign-up confirmation only confirm? */
+  checkConfirmation(subject: string, question: string): Promise<ConfirmationCheck>;
 }
 
 export class LlmError extends Error {
@@ -70,10 +79,8 @@ export function instructions(knowledge: Knowledge): string {
       'reaching out", "I hope this helps", "Feel free to reach out", "Don\'t hesitate to", "I\'d be happy to", ' +
       '"Certainly" or "Absolutely". Don\'t repeat their question back to them.',
     "- Answer what they asked, then stop. Short is good. Use their name if they gave one.",
-    style.signOff
-      ? "- Don't add a sign-off or signature. This one is appended automatically:\n" + style.signOff
-      : "- Don't write a signature (name, title, email, footer): Jelly adds the sender's own when the reply is " +
-        'sent. A short closing word like "Cheers" is fine if the past replies use one.',
+    "- End with the last sentence of the reply. No closing line (\"Cheers\", \"Best\", \"Kind regards\"…), no " +
+      "name and no signature: Jelly puts the sender's own signature right below the reply.",
     ...(style.notes ? ["", "Notes from the team on how replies should sound:", style.notes] : []),
     "",
     "Facts:",
@@ -176,7 +183,15 @@ export abstract class PromptDrafter implements Drafter {
     });
   }
 
+  async checkConfirmation(subject: string, question: string): Promise<ConfirmationCheck> {
+    const out = await this.classify({ instructions: CONFIRMATION_INSTRUCTIONS, user: confirmationPrompt(subject, question) });
+    return { onlyConfirmation: out.only_confirmation, reason: out.reason.trim() };
+  }
+
   protected abstract complete(parts: PromptParts): Promise<RawDraft>;
+
+  /** No knowledge block: the confirmation check only needs the reply itself. */
+  protected abstract classify(parts: { instructions: string; user: string }): Promise<RawConfirmationCheck>;
 
   private async call(request: DraftRequest, revise?: DraftRequest["revise"]): Promise<DraftResult> {
     let user = renderThread(request.thread, request.senderName);
@@ -213,19 +228,32 @@ export class AnthropicDrafter extends PromptDrafter {
     this.client = client ?? new Anthropic();
   }
 
-  protected async complete(parts: PromptParts): Promise<RawDraft> {
+  protected complete(parts: PromptParts): Promise<RawDraft> {
+    return this.parse(OutputSchema, 16_000, parts.user, [
+      { type: "text", text: parts.instructions },
+      // Docs and examples are the same for every email in a run, so cache them.
+      { type: "text", text: parts.knowledge, cache_control: { type: "ephemeral" } },
+    ]);
+  }
+
+  protected classify(parts: { instructions: string; user: string }): Promise<RawConfirmationCheck> {
+    return this.parse(ConfirmationCheckSchema, 2_000, parts.user, [{ type: "text", text: parts.instructions }]);
+  }
+
+  private async parse<S extends z.ZodType>(
+    schema: S,
+    maxTokens: number,
+    user: string,
+    system: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>,
+  ): Promise<z.infer<S>> {
     let response;
     try {
       response = await this.client.beta.messages.parse({
         model: this.model,
-        max_tokens: 16_000,
-        system: [
-          { type: "text", text: parts.instructions },
-          // Docs and examples are the same for every email in a run, so cache them.
-          { type: "text", text: parts.knowledge, cache_control: { type: "ephemeral" } },
-        ],
-        messages: [{ role: "user", content: parts.user }],
-        output_config: { format: betaZodOutputFormat(OutputSchema) },
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }],
+        output_config: { format: betaZodOutputFormat(schema) },
         // If a safety classifier declines (false positives happen), retry on Anthropic's recommended fallback.
         ...(FALLBACK_MODELS.has(this.model)
           ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }

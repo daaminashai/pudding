@@ -27,8 +27,9 @@ ${extra}
 <form class="button_to" method="post" action="/hack-club/drafts/reply?message%5Bconversation_id%5D=55&amp;message%5Bprevious_message_id%5D=101"><button data-turbo-frame="message-form-101"></button></form>
 </div></div></turbo-frame></body></html>`;
 
+// Shaped like Jelly's real reply box: two empty lines, the signature, then the quote.
 const prefill =
-  '<div><br></div><div class="jelly-signature"><b>Daamin Ashai</b></div><div><br></div>\n<div class="jelly-quote">On Thu … wrote:<blockquote>hi</blockquote></div>';
+  '<br>\n<br>\n<div class="jelly-signature">\n<div><b>Daamin Ashai</b><br></div>\n</div>\n\n<div class="jelly-quote">On Thu … wrote:<blockquote>hi</blockquote></div>';
 const draftForm = `<turbo-stream action="update" target="message-form-101"><template>
 <form action="/hack-club/conversations/test-thread/messages/msg-draft-1" method="post">
 <input type="hidden" name="_method" value="patch" autocomplete="off">
@@ -108,9 +109,19 @@ describe("reading Jelly pages", () => {
 });
 
 describe("building the send", () => {
-  it("writes the reply above Jelly's signature and quote, like the captured send", () => {
-    expect(composeHtmlBody("test", prefill)).toBe(
-      '<div>test</div><div><br></div><div class="jelly-signature"><b>Daamin Ashai</b></div><div><br></div>\n<div class="jelly-quote">On Thu … wrote:<blockquote>hi</blockquote></div>',
+  it("puts the signature on the line right after the reply, with no empty lines between", () => {
+    expect(composeHtmlBody("test\n\n\n", prefill)).toBe(
+      '<div>test</div><div class="jelly-signature">\n<div><b>Daamin Ashai</b><br></div>\n</div>\n\n<div class="jelly-quote">On Thu … wrote:<blockquote>hi</blockquote></div>',
+    );
+    // Other shapes of empty lines Jelly could use are dropped too.
+    expect(composeHtmlBody("hi", '<div><br></div><p>&nbsp;</p><br/><div class="jelly-signature">sig</div>')).toBe(
+      '<div>hi</div><div class="jelly-signature">sig</div>',
+    );
+  });
+
+  it("leaves one blank line before the quote when there's no signature", () => {
+    expect(composeHtmlBody("hi", '<br>\n<br>\n<div class="jelly-quote">On Thu … wrote:</div>')).toBe(
+      '<div>hi</div><div><br></div><div class="jelly-quote">On Thu … wrote:</div>',
     );
   });
 
@@ -123,7 +134,7 @@ describe("building the send", () => {
     expect(fields._method).toBe("patch");
     expect(fields.authenticity_token).toBe("FORM_TOKEN");
     expect(fields.draft_lock_token).toBe("LOCK_TOKEN");
-    expect(fields["message[html_body]"]).toMatch(/^<div>hi jane<\/div><div><br><\/div><div class="jelly-signature">/);
+    expect(fields["message[html_body]"]).toMatch(/^<div>hi jane<\/div><div class="jelly-signature">/);
     expect(fields.archive_conversation).toBe("true");
     expect(fields["message[schedule_sending_at]"]).toBe("");
     expect(fields.button).toBe("");
