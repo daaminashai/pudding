@@ -138,6 +138,8 @@ export class State {
     this.addColumn("drafts", "kind", "TEXT NOT NULL DEFAULT 'reply'");
     // 0 for drafts written before confirmations existed, until a scan has checked them.
     this.addColumn("drafts", "confirmation_checked", "INTEGER NOT NULL DEFAULT 0");
+    // Which version of the example extraction wrote the row; older rows are learned again.
+    this.addColumn("learned", "version", "INTEGER NOT NULL DEFAULT 1");
   }
 
   private addColumn(table: string, column: string, definition: string): void {
@@ -329,21 +331,23 @@ export class State {
       .run(conversationId, lastMessageAt, now.toISOString());
   }
 
-  getLearned(conversationId: string): { updatedAt: string; examples: Example[] } | undefined {
+  getLearned(conversationId: string): { updatedAt: string; version: number; examples: Example[] } | undefined {
     const row = this.db
-      .prepare("SELECT updated_at, examples_json FROM learned WHERE conversation_id = ?")
-      .get(conversationId) as { updated_at: string; examples_json: string } | undefined;
-    return row ? { updatedAt: row.updated_at, examples: JSON.parse(row.examples_json) } : undefined;
+      .prepare("SELECT updated_at, version, examples_json FROM learned WHERE conversation_id = ?")
+      .get(conversationId) as { updated_at: string; version: number; examples_json: string } | undefined;
+    return row
+      ? { updatedAt: row.updated_at, version: row.version, examples: JSON.parse(row.examples_json) }
+      : undefined;
   }
 
-  putLearned(conversationId: string, updatedAt: string, examples: Example[]): void {
+  putLearned(conversationId: string, updatedAt: string, version: number, examples: Example[]): void {
     this.db
       .prepare(
-        `INSERT INTO learned (conversation_id, updated_at, examples_json) VALUES (?, ?, ?)
+        `INSERT INTO learned (conversation_id, updated_at, version, examples_json) VALUES (?, ?, ?, ?)
          ON CONFLICT (conversation_id) DO UPDATE SET updated_at = excluded.updated_at,
-           examples_json = excluded.examples_json`,
+           version = excluded.version, examples_json = excluded.examples_json`,
       )
-      .run(conversationId, updatedAt, JSON.stringify(examples));
+      .run(conversationId, updatedAt, version, JSON.stringify(examples));
   }
 
   close(): void {

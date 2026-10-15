@@ -124,13 +124,25 @@ const ENTITIES: Record<string, string> = {
   nbsp: " ",
 };
 
+/**
+ * A link written the way a reply's text writes it (see reply-html.ts): just the
+ * address when that's what the link shows, otherwise [text](url).
+ */
+function linkText(href: string, inner: string): string {
+  const text = inner.replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ").trim();
+  if (text === "") return href;
+  const bare = (s: string) =>
+    s.toLowerCase().replace(/^(mailto:|https?:\/\/)/, "").replace(/^www\./, "").replace(/\/$/, "");
+  return bare(text) === bare(href) ? text : `[${text}](${href})`;
+}
+
 export function htmlToText(html: string): string {
   return html
     .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, "")
     .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, (q) => q.replace(/^/gm, "> "))
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|li|tr|h[1-6]|blockquote)>/gi, "\n")
-    .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, "$2 ($1)")
+    .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, inner: string) => linkText(href, inner))
     .replace(/<[^>]+>/g, "")
     .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code: string) => {
       if (code.startsWith("#x") || code.startsWith("#X")) return String.fromCodePoint(parseInt(code.slice(2), 16));

@@ -6,6 +6,7 @@
 // Nothing here retries: a request that might have sent an email is never repeated.
 import { parse, type HTMLElement } from "node-html-parser";
 import { redact } from "./redact.js";
+import { textToHtml } from "./reply-html.js";
 
 /** The session is dead (logged out, expired, or CSRF rejected). Sending must stop. */
 export class JellySessionError extends Error {
@@ -144,20 +145,6 @@ export function parseReplyForm(html: string): ReplyForm {
     } else fields.push([name, el.getAttribute("value") ?? ""]);
   }
   return { action: form.getAttribute("action")!, fields };
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-/** Plain text to the editor's markup: one <div> per line, <div><br></div> for blank lines. */
-export function textToHtml(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .trim()
-    .split("\n")
-    .map((line) => (line.trim() === "" ? "<div><br></div>" : `<div>${escapeHtml(line)}</div>`))
-    .join("");
 }
 
 // Jelly's box starts with empty lines for typing in ("<br>\n<br>\n" above the

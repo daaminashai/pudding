@@ -72,8 +72,12 @@ export function instructions(knowledge: Knowledge): string {
     "How to write:",
     "- Sound like the past replies below: same voice, length, greeting and level of formality. If there are none, " +
       "write like a friendly person typing a quick, plain email.",
-    "- Plain text only. No markdown: no headings, bold, bullet points, numbered lists or [text](url) links. Paste " +
-      "URLs as they are.",
+    "- Plain text only. No markdown: no headings, bold, bullet points or numbered lists.",
+    "- Links: email addresses and web addresses are sent as clickable links, so write them in the sentence the way " +
+      "the past replies do. Leave off https:// (example.org/apply, not https://example.org/apply). " +
+      "For a long or messy address (a Slack channel, a form, a sign-in link) link a few words instead with " +
+      "[words](url), like [#help](https://chat.example.org/archives/C123) or [fill out the form](https://…). " +
+      "Never use [words](url) for an email address.",
     "- No em dashes. Use commas, full stops or brackets instead.",
     '- No filler. Never write things like "I hope this email finds you well", "Great question", "Thanks for ' +
       'reaching out", "I hope this helps", "Feel free to reach out", "Don\'t hesitate to", "I\'d be happy to", ' +

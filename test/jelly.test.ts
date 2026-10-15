@@ -12,7 +12,6 @@ import {
   parseConversationPage,
   parseReplyForm,
   sendFields,
-  textToHtml,
 } from "../src/jelly.js";
 import { ConversationChangedError, DraftOpenError, JellySender } from "../src/send.js";
 import type { Draft } from "../src/state.js";
@@ -125,16 +124,15 @@ describe("building the send", () => {
     );
   });
 
-  it("escapes the reply and keeps blank lines", () => {
-    expect(textToHtml("hey <b>you</b> & co\n\nbye")).toBe("<div>hey &lt;b&gt;you&lt;/b&gt; &amp; co</div><div><br></div><div>bye</div>");
-  });
-
   it("sends the form's fields with our body, archive on, no schedule, plain button", () => {
     const fields = Object.fromEntries(sendFields(parseReplyForm(draftForm), "hi jane"));
     expect(fields._method).toBe("patch");
     expect(fields.authenticity_token).toBe("FORM_TOKEN");
     expect(fields.draft_lock_token).toBe("LOCK_TOKEN");
     expect(fields["message[html_body]"]).toMatch(/^<div>hi jane<\/div><div class="jelly-signature">/);
+    expect(Object.fromEntries(sendFields(parseReplyForm(draftForm), "see gas.hackclub.com"))["message[html_body]"]).toMatch(
+      /^<div>see <a href="https:\/\/gas\.hackclub\.com">gas\.hackclub\.com<\/a><\/div>/,
+    );
     expect(fields.archive_conversation).toBe("true");
     expect(fields["message[schedule_sending_at]"]).toBe("");
     expect(fields.button).toBe("");
