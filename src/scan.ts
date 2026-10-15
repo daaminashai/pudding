@@ -22,7 +22,7 @@ import { log } from "./log.js";
 import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from "./marmalade.js";
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
-import type { DraftContent, DraftKind, State } from "./state.js";
+import type { Draft, DraftContent, DraftKind, State } from "./state.js";
 import { latestMessage, messageText, messageTime, stripQuoted, toThread, type Thread } from "./thread.js";
 
 export interface ScanDeps {
@@ -140,6 +140,8 @@ export function finishReply(reply: string): string {
 export async function scan(
   deps: ScanDeps,
   onProgress: (p: ScanProgress) => void = () => {},
+  /** Drafts being sent or rewritten right now, which must be left alone. */
+  leaveAlone: (draftId: number) => boolean = () => false,
 ): Promise<{ knowledge: Knowledge | null; progress: ScanProgress; names: Map<string, string> }> {
   const { config, marmalade, state } = deps;
   const progress: ScanProgress = {
@@ -161,27 +163,24 @@ export async function scan(
   await sortOldConfirmations(deps, (message) => report({ message }));
   report({ message: "Looking for new emails…" });
 
-  // startDate filters on when a conversation was created, which would miss new
-  // replies in old threads, so list every open conversation and filter here.
-  const list = await marmalade.listConversations(config.mailboxId, {
-    status: "open",
-    sortBy: "lastMessageAt",
-    sortOrder: "desc",
-  });
+  const list = await listOpen(deps);
+  // An archived conversation drops out of this list, so nothing below would look
+  // at it again: take any draft still waiting on one out of the queue.
+  const open = new Set(uniqueIds(list));
+  const notOpen = state.pendingDrafts().filter((d) => !open.has(d.conversationId));
+  const rechecked = await recheckDrafts(deps, notOpen, leaveAlone);
+  progress.errors.push(...rechecked.errors);
+  const tookOut =
+    rechecked.outdated.length > 0 ? ` Took out ${rechecked.outdated.length} draft(s) already handled in Jelly.` : "";
   const cutoff = Date.now() - config.unansweredLookbackDays * 24 * 3600_000;
   const recent = list.filter((l) => Date.parse(l.conversation.lastMessageAt) >= cutoff);
-  const activity = new Map<string, string>();
-  for (const { conversation } of recent) {
-    const at = normalizeTime(conversation.lastMessageAt);
-    const prev = activity.get(conversation.id);
-    if (prev === undefined || at > prev) activity.set(conversation.id, at);
-  }
+  const activity = latestActivity(recent);
   const ids = uniqueIds(recent)
     .reverse() // oldest first
     .filter((id) => state.lastChecked(id) !== activity.get(id));
   const unchanged = activity.size - ids.length;
   if (ids.length === 0) {
-    report({ phase: "done", unchanged, message: "No new emails since the last check." });
+    report({ phase: "done", unchanged, message: `No new emails since the last check.${tookOut}` });
     return { knowledge: null, progress, names: new Map() };
   }
   report({
@@ -226,9 +225,32 @@ export async function scan(
   }
   report({
     phase: "done",
-    message: `Done: ${progress.drafted} new draft(s), ${progress.skipped} skipped, ${progress.errors.length} error(s).`,
+    message: `Done: ${progress.drafted} new draft(s), ${progress.skipped} skipped, ${progress.errors.length} error(s).${tookOut}`,
   });
   return { knowledge: knowledge ? await knowledge : null, progress, names };
+}
+
+/**
+ * Every open conversation. startDate filters on when a conversation was created,
+ * which would miss new replies in old threads, so callers filter by date.
+ */
+function listOpen(deps: Pick<ScanDeps, "config" | "marmalade">) {
+  return deps.marmalade.listConversations(deps.config.mailboxId, {
+    status: "open",
+    sortBy: "lastMessageAt",
+    sortOrder: "desc",
+  });
+}
+
+/** Each conversation's lastMessageAt, keeping the newest when one is listed twice. */
+function latestActivity(rows: Array<{ conversation: { id: string; lastMessageAt: string } }>): Map<string, string> {
+  const activity = new Map<string, string>();
+  for (const { conversation } of rows) {
+    const at = normalizeTime(conversation.lastMessageAt);
+    const prev = activity.get(conversation.id);
+    if (prev === undefined || at > prev) activity.set(conversation.id, at);
+  }
+  return activity;
 }
 
 type Outcome = "drafted" | "skipped" | "seen" | "answered" | "empty";
@@ -277,7 +299,7 @@ async function handleConversation(
   }
   if (force ? state.hasDraft(latest.id) : state.hasSeen(latest.id)) return "seen";
   // A new inbound message replaces any older pending draft in the same conversation.
-  state.staleConversation(conversation.id, "a newer message arrived", latest.id);
+  state.staleConversation(conversation.id, NEWER_MESSAGE, latest.id);
 
   const sender = extractSender(latest);
   const subject = conversation.subject ?? latest.subject ?? "";
@@ -344,6 +366,74 @@ async function handleConversation(
   }
 
   return insert(content);
+}
+
+export const NEWER_MESSAGE = "a newer message arrived";
+
+/**
+ * Why a waiting draft no longer needs sending, going by its conversation as
+ * Marmalade has it now: a teammate answered or archived it in Jelly, or a newer
+ * email came in. Null while it still needs sending.
+ */
+export function outdatedReason(draft: Pick<Draft, "messageId">, conversation: ConversationDetail): string | null {
+  const latest = latestMessage(conversation);
+  const answered = latest !== undefined && latest.id !== draft.messageId && !latest.isInbound;
+  if (conversation.status === "archived") return answered ? "answered and archived in Jelly" : "archived in Jelly";
+  if (!latest || latest.id === draft.messageId) return null;
+  return latest.isInbound ? NEWER_MESSAGE : "answered in Jelly";
+}
+
+export interface RecheckResult {
+  /** Drafts taken out of the queue, and why. */
+  outdated: Array<{ id: number; subject: string; reason: string }>;
+  errors: string[];
+}
+
+/**
+ * Looks each draft's conversation up again and marks the ones that no longer
+ * need sending as stale, so they leave the queue. Drafts nothing, sends nothing.
+ */
+export async function recheckDrafts(
+  deps: Pick<ScanDeps, "config" | "marmalade" | "state">,
+  drafts: Draft[],
+  leaveAlone: (draftId: number) => boolean = () => false,
+): Promise<RecheckResult> {
+  const result: RecheckResult = { outdated: [], errors: [] };
+  await pool(drafts, CONCURRENCY, async (draft) => {
+    try {
+      const conversation = await deps.marmalade.getConversation(deps.config.mailboxId, draft.conversationId);
+      const reason = outdatedReason(draft, conversation);
+      // Checked after the lookup: it may have been sent, discarded or picked up for sending meanwhile.
+      if (!reason || leaveAlone(draft.id) || deps.state.getDraft(draft.id)?.status !== "pending") return;
+      deps.state.setStatus(draft.id, "stale", reason);
+      result.outdated.push({ id: draft.id, subject: draft.subject, reason });
+    } catch (err) {
+      log.warn("couldn't recheck a waiting draft", { draftId: draft.id, error: errorMessage(err) });
+      result.errors.push(`${draft.conversationId}: ${errorMessage(err)}`);
+    }
+  });
+  return result;
+}
+
+/**
+ * The Refresh button: takes every waiting draft (both tabs) that no longer
+ * needs sending out of the queue. Only conversations that left the open list
+ * (archived) or have activity since they were last checked are looked up
+ * again, so it's quick when little has changed.
+ */
+export async function refreshQueue(
+  deps: Pick<ScanDeps, "config" | "marmalade" | "state">,
+  leaveAlone: (draftId: number) => boolean = () => false,
+): Promise<RecheckResult & { checked: number }> {
+  const { state } = deps;
+  const drafts = state.pendingDrafts();
+  if (drafts.length === 0) return { checked: 0, outdated: [], errors: [] };
+  const activity = latestActivity(await listOpen(deps));
+  const moved = drafts.filter((d) => {
+    const at = activity.get(d.conversationId);
+    return at === undefined || at !== state.lastChecked(d.conversationId);
+  });
+  return { checked: drafts.length, ...(await recheckDrafts(deps, moved, leaveAlone)) };
 }
 
 /**

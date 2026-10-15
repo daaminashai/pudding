@@ -20,7 +20,7 @@ const STATUS: Record<string, { label: string; variant: "default" | "outline" | "
   stale: {
     label: "Out of date",
     variant: "muted",
-    hint: "The conversation moved on before this was approved (a new message, or someone replied in Jelly), so it was never sent.",
+    hint: "The conversation moved on before this was approved (a new message, or a teammate replied or archived it in Jelly), so it was never sent.",
   },
 };
 

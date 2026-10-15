@@ -15,7 +15,10 @@ import {
   contentFlags,
   jellyUrl,
   memberNames,
+  NEWER_MESSAGE,
+  outdatedReason,
   processConversation,
+  refreshQueue,
   scan,
   finishReply,
   type ScanDeps,
@@ -24,7 +27,6 @@ import {
 import { JellySendError, JellySessionError } from "./jelly.js";
 import { ConversationChangedError, DraftOpenError, type Sender } from "./send.js";
 import type { Draft, DraftKind } from "./state.js";
-import { latestMessage } from "./thread.js";
 
 export interface DashboardDeps extends ScanDeps {
   sender: Sender;
@@ -121,7 +123,7 @@ export class Dashboard {
   startScan(): Promise<void> {
     if (this.scanPromise) return this.scanPromise;
     Object.assign(this.scanStatus, { running: true, error: null, progress: null });
-    this.scanPromise = scan(this.deps, (p) => (this.scanStatus.progress = p))
+    this.scanPromise = scan(this.deps, (p) => (this.scanStatus.progress = p), (id) => this.busy.has(id))
       .then(({ knowledge, progress, names }) => {
         // A scan with nothing new loads neither, so keep what's already known.
         if (knowledge) this.knowledge = knowledge;
@@ -194,6 +196,7 @@ export class Dashboard {
     }
     if (req.method === "POST" && url.pathname === "/api/drafts/send") return this.startBulk(res, "reply", await readJson(req));
     if (req.method === "POST" && url.pathname === "/api/drafts/discard") return this.discardMany(res, await readJson(req));
+    if (req.method === "POST" && url.pathname === "/api/drafts/refresh") return this.refreshDrafts(res);
     if (req.method === "POST" && url.pathname === "/api/bulk/stop") {
       this.bulkStop = true;
       return send(res, 200, this.snapshot());
@@ -293,11 +296,11 @@ export class Dashboard {
       let warning: string | null = null;
       try {
         const conversation = await marmalade.getConversation(config.mailboxId, draft.conversationId);
-        const latest = latestMessage(conversation);
-        if (latest && latest.id !== draft.messageId) {
-          const reason = latest.isInbound ? "a newer message arrived" : "someone already replied in Jelly";
+        const reason = outdatedReason(draft, conversation);
+        if (reason) {
           state.setStatus(id, "stale", reason);
-          return { ok: false, httpStatus: 409, error: `Not approved: ${reason}. Scan again to get a fresh draft.`, stopBatch: false };
+          const next = reason === NEWER_MESSAGE ? " Check inbox again to get a fresh draft." : "";
+          return { ok: false, httpStatus: 409, error: `Not approved: ${reason}.${next}`, stopBatch: false };
         }
       } catch (err) {
         if (sender.unavailableReason() === null) {
@@ -471,6 +474,13 @@ export class Dashboard {
       failed: bulk.failed.length,
       stopped: bulk.stoppedReason,
     });
+  }
+
+  /** The Refresh button. Drafts being sent or rewritten are left alone. */
+  private async refreshDrafts(res: http.ServerResponse) {
+    const { checked, outdated, errors } = await refreshQueue(this.deps, (id) => this.busy.has(id));
+    const newer = outdated.filter((o) => o.reason === NEWER_MESSAGE).length;
+    return send(res, 200, { checked, removed: outdated.length, newer, errors });
   }
 
   /** "Draft anyway" on a skipped email: forget the skip and draft it, skip checks off. */

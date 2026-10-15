@@ -92,6 +92,16 @@ export interface ApproveResult {
   warning: string | null;
 }
 
+export interface RefreshResult {
+  /** Drafts waiting in To review and Confirmations that were checked. */
+  checked: number;
+  /** Taken out of the queue: answered or archived in Jelly, or a newer email arrived. */
+  removed: number;
+  /** Of those, ones with a newer email, which Check inbox drafts again. */
+  newer: number;
+  errors: string[];
+}
+
 export interface DiscardResult {
   discarded: number;
   /** Drafts left alone because they were being sent or rewritten. */
