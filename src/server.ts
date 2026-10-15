@@ -478,9 +478,9 @@ export class Dashboard {
 
   /** The Refresh button. Drafts being sent or rewritten are left alone. */
   private async refreshDrafts(res: http.ServerResponse) {
-    const { checked, outdated, errors } = await refreshQueue(this.deps, (id) => this.busy.has(id));
-    const newer = outdated.filter((o) => o.reason === NEWER_MESSAGE).length;
-    return send(res, 200, { checked, removed: outdated.length, newer, errors });
+    const { checked, drafts, skipped, errors } = await refreshQueue(this.deps, (id) => this.busy.has(id));
+    const newer = [...drafts, ...skipped].filter((o) => o.reason === NEWER_MESSAGE).length;
+    return send(res, 200, { checked, removed: drafts.length, skippedRemoved: skipped.length, newer, errors });
   }
 
   /** "Draft anyway" on a skipped email: forget the skip and draft it, skip checks off. */

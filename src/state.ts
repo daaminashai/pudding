@@ -140,6 +140,9 @@ export class State {
     this.addColumn("drafts", "confirmation_checked", "INTEGER NOT NULL DEFAULT 0");
     // Which version of the example extraction wrote the row; older rows are learned again.
     this.addColumn("learned", "version", "INTEGER NOT NULL DEFAULT 1");
+    // Why a skipped email no longer needs looking at (answered or archived in Jelly, or a newer
+    // message). Null while it does. The row stays, so the email is never drafted after all.
+    this.addColumn("skipped", "handled_reason", "TEXT");
   }
 
   private addColumn(table: string, column: string, definition: string): void {
@@ -284,15 +287,40 @@ export class State {
       .run(s.messageId, s.conversationId, s.subject, s.sender, s.reason, now.toISOString());
   }
 
+  /** Skipped emails nobody has dealt with in Jelly yet, newest first. */
   recentSkipped(limit = 50): Skipped[] {
     return (
       this.db
         .prepare(
           `SELECT message_id AS messageId, conversation_id AS conversationId, subject, sender, reason, at
-           FROM skipped ORDER BY at DESC LIMIT ?`,
+           FROM skipped WHERE handled_reason IS NULL ORDER BY at DESC LIMIT ?`,
         )
         .all(limit) as Skipped[]
     );
+  }
+
+  /** Every skipped email nobody has dealt with in Jelly yet. */
+  unhandledSkipped(): Skipped[] {
+    return this.recentSkipped(-1);
+  }
+
+  /** Takes a skipped email off the Skipped tab. False if it already was. */
+  skippedHandled(messageId: string, reason: string): boolean {
+    return (
+      this.db
+        .prepare("UPDATE skipped SET handled_reason = ? WHERE message_id = ? AND handled_reason IS NULL")
+        .run(reason, messageId).changes > 0
+    );
+  }
+
+  /** Skipped emails in this conversation that aren't `exceptMessageId` leave the Skipped tab. */
+  skippedConversationHandled(conversationId: string, reason: string, exceptMessageId?: string): number {
+    return this.db
+      .prepare(
+        `UPDATE skipped SET handled_reason = ?
+         WHERE conversation_id = ? AND handled_reason IS NULL AND message_id != ?`,
+      )
+      .run(reason, conversationId, exceptMessageId ?? "").changes;
   }
 
   /** Replies a person approved, newest first, as examples for future drafts. */
