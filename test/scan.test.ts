@@ -254,6 +254,24 @@ describe("scan", () => {
     expect(fetched.sort()).toEqual(["cnv_a", "cnv_b"].map((id) => `/api/rpc/mailboxes/${MAILBOX}/conversations/${id}`));
   });
 
+  it("takes skipped emails off the Skipped tab once they're answered, archived or followed up", async () => {
+    const [bounce, noreply, newsletter] = [fixtures.mailerDaemon(), fixtures.noreplySender(), fixtures.listUnsubscribe()];
+    const { deps, state, marmalade, drafter } = scanDeps([bounce, noreply, newsletter]);
+    await scan(deps);
+    expect(state.recentSkipped()).toHaveLength(3);
+    marmalade.conversations[0] = { ...bounce, status: "archived" };
+    marmalade.conversations[1] = withMessage(noreply, { inbound: false, from: "team@ours.example", minutesAgo: 1 });
+    marmalade.conversations[2] = withMessage(newsletter, { minutesAgo: 1 });
+
+    const { progress } = await scan(deps);
+
+    expect(state.recentSkipped()).toEqual([]);
+    expect(progress.message).toContain("Took out 1 skipped email(s) already handled in Jelly.");
+    // The new email in the newsletter thread is drafted; the skipped ones never are.
+    expect(drafter.calls).toHaveLength(1);
+    expect(state.hasSeen(bounce.messages[0]!.id)).toBe(true);
+  });
+
   it("flags assigned conversations instead of skipping them", async () => {
     const { deps, state, marmalade } = scanDeps([fixtures.clean()]);
     marmalade.assignments.cnv_clean = [

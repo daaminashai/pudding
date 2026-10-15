@@ -92,22 +92,35 @@ export function App() {
     setRefreshing(true);
     try {
       const r = await api.refreshDrafts();
-      if (r.removed > 0) {
-        const handled = r.removed - r.newer;
+      const total = r.removed + r.skippedRemoved;
+      if (total > 0) {
+        const what = [
+          r.removed > 0 && plural(r.removed, "draft"),
+          r.skippedRemoved > 0 && plural(r.skippedRemoved, "skipped email"),
+        ];
+        const them = total === 1 ? "it" : "them";
+        // Only drafts go to Done; skipped emails just leave the Skipped tab.
+        const done =
+          r.removed === 0
+            ? ""
+            : r.skippedRemoved === 0
+              ? ` You'll find ${them} in Done.`
+              : ` The ${r.removed === 1 ? "draft is" : "drafts are"} in Done.`;
+        const handled = total - r.newer;
         const newer = `Check inbox to draft a fresh reply to ${r.newer === 1 ? "the one" : "the ones"} with a newer email.`;
-        toast(`Took out ${plural(r.removed, "draft")}`, {
+        toast(`Took out ${what.filter(Boolean).join(" and ")}`, {
           description:
             r.newer === 0
-              ? `A teammate already answered or archived ${r.removed === 1 ? "it" : "them"} in Jelly. You'll find ${r.removed === 1 ? "it" : "them"} in Done.`
+              ? `A teammate already answered or archived ${them} in Jelly.${done}`
               : handled === 0
                 ? newer
                 : `${plural(handled, "was", "were")} already answered or archived in Jelly. ${newer}`,
         });
       } else if (r.errors.length === 0) {
-        toast("Nothing to take out", { description: "Every waiting draft still needs a reply." });
+        toast("Nothing to take out", { description: "Nothing waiting here was answered or archived in Jelly." });
       }
       if (r.errors.length > 0) {
-        toast.error(`${plural(r.errors.length, "draft")} couldn't be checked`, { description: r.errors[0] });
+        toast.error(`${plural(r.errors.length, "conversation")} couldn't be checked`, { description: r.errors[0] });
       }
       void refresh();
     } catch (e) {
@@ -218,8 +231,10 @@ export function App() {
                     </TabsTrigger>
                   </Hint>
                 </TabsList>
-                {((tab === "review" && pending > 0) || (tab === "confirmations" && snap.confirmations.length > 0)) && (
-                  <Hint label="Check each waiting draft against Jelly and take out the ones a teammate already answered or archived. Nothing is drafted or sent.">
+                {((tab === "review" && pending > 0) ||
+                  (tab === "confirmations" && snap.confirmations.length > 0) ||
+                  (tab === "skipped" && snap.skipped.length > 0)) && (
+                  <Hint label="Check every waiting draft and skipped email against Jelly and take out the ones a teammate already answered or archived. Nothing is drafted or sent.">
                     <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void refreshQueue()} disabled={refreshing}>
                       {refreshing ? <LoaderCircle className="animate-spin" /> : <ListRestart />}
                       {refreshing ? "Refreshing…" : "Refresh"}

@@ -93,11 +93,13 @@ export interface ApproveResult {
 }
 
 export interface RefreshResult {
-  /** Drafts waiting in To review and Confirmations that were checked. */
+  /** Drafts waiting in To review and Confirmations, and skipped emails, that were checked. */
   checked: number;
-  /** Taken out of the queue: answered or archived in Jelly, or a newer email arrived. */
+  /** Drafts taken out of the queue: answered or archived in Jelly, or a newer email arrived. */
   removed: number;
-  /** Of those, ones with a newer email, which Check inbox drafts again. */
+  /** Skipped emails taken off the Skipped tab, for the same reasons. */
+  skippedRemoved: number;
+  /** Of both, ones with a newer email, which Check inbox looks at again. */
   newer: number;
   errors: string[];
 }

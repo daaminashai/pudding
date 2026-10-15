@@ -22,7 +22,7 @@ import { log } from "./log.js";
 import { MarmaladeError, type ConversationDetail, type MarmaladeClient } from "./marmalade.js";
 import { extractHeaders, extractSender } from "./metadata.js";
 import { errorMessage } from "./redact.js";
-import type { Draft, DraftContent, DraftKind, State } from "./state.js";
+import type { Draft, DraftContent, DraftKind, Skipped, State } from "./state.js";
 import { latestMessage, messageText, messageTime, stripQuoted, toThread, type Thread } from "./thread.js";
 
 export interface ScanDeps {
@@ -164,14 +164,17 @@ export async function scan(
   report({ message: "Looking for new emails…" });
 
   const list = await listOpen(deps);
-  // An archived conversation drops out of this list, so nothing below would look
-  // at it again: take any draft still waiting on one out of the queue.
+  // An archived conversation drops out of this list, so nothing below would look at
+  // it again: take any draft or skipped email still waiting on one out.
   const open = new Set(uniqueIds(list));
-  const notOpen = state.pendingDrafts().filter((d) => !open.has(d.conversationId));
-  const rechecked = await recheckDrafts(deps, notOpen, leaveAlone);
+  const notOpen = (x: { conversationId: string }) => !open.has(x.conversationId);
+  const rechecked = await recheck(
+    deps,
+    { drafts: state.pendingDrafts().filter(notOpen), skipped: state.unhandledSkipped().filter(notOpen) },
+    leaveAlone,
+  );
   progress.errors.push(...rechecked.errors);
-  const tookOut =
-    rechecked.outdated.length > 0 ? ` Took out ${rechecked.outdated.length} draft(s) already handled in Jelly.` : "";
+  const tookOut = tookOutMessage(rechecked);
   const cutoff = Date.now() - config.unansweredLookbackDays * 24 * 3600_000;
   const recent = list.filter((l) => Date.parse(l.conversation.lastMessageAt) >= cutoff);
   const activity = latestActivity(recent);
@@ -228,6 +231,13 @@ export async function scan(
     message: `Done: ${progress.drafted} new draft(s), ${progress.skipped} skipped, ${progress.errors.length} error(s).${tookOut}`,
   });
   return { knowledge: knowledge ? await knowledge : null, progress, names };
+}
+
+/** " Took out 2 draft(s) and 1 skipped email(s) already handled in Jelly.", or "" if none. */
+function tookOutMessage({ drafts, skipped }: RecheckResult): string {
+  const parts = [drafts.length > 0 && `${drafts.length} draft(s)`, skipped.length > 0 && `${skipped.length} skipped email(s)`];
+  const what = parts.filter(Boolean).join(" and ");
+  return what ? ` Took out ${what} already handled in Jelly.` : "";
 }
 
 /**
@@ -295,11 +305,13 @@ async function handleConversation(
   if (!latest) return "empty";
   if (!latest.isInbound) {
     state.staleConversation(conversation.id, "answered in Jelly");
+    state.skippedConversationHandled(conversation.id, "answered in Jelly");
     return "answered";
   }
   if (force ? state.hasDraft(latest.id) : state.hasSeen(latest.id)) return "seen";
   // A new inbound message replaces any older pending draft in the same conversation.
   state.staleConversation(conversation.id, NEWER_MESSAGE, latest.id);
+  state.skippedConversationHandled(conversation.id, NEWER_MESSAGE, latest.id);
 
   const sender = extractSender(latest);
   const subject = conversation.subject ?? latest.subject ?? "";
@@ -371,55 +383,70 @@ async function handleConversation(
 export const NEWER_MESSAGE = "a newer message arrived";
 
 /**
- * Why a waiting draft no longer needs sending, going by its conversation as
- * Marmalade has it now: a teammate answered or archived it in Jelly, or a newer
- * email came in. Null while it still needs sending.
+ * Why a waiting draft or skipped email no longer needs looking at, going by its
+ * conversation as Marmalade has it now: a teammate answered or archived it in
+ * Jelly, or a newer email came in. Null while it still does.
  */
-export function outdatedReason(draft: Pick<Draft, "messageId">, conversation: ConversationDetail): string | null {
+export function outdatedReason(item: { messageId: string }, conversation: ConversationDetail): string | null {
   const latest = latestMessage(conversation);
-  const answered = latest !== undefined && latest.id !== draft.messageId && !latest.isInbound;
+  const answered = latest !== undefined && latest.id !== item.messageId && !latest.isInbound;
   if (conversation.status === "archived") return answered ? "answered and archived in Jelly" : "archived in Jelly";
-  if (!latest || latest.id === draft.messageId) return null;
+  if (!latest || latest.id === item.messageId) return null;
   return latest.isInbound ? NEWER_MESSAGE : "answered in Jelly";
 }
 
 export interface RecheckResult {
   /** Drafts taken out of the queue, and why. */
-  outdated: Array<{ id: number; subject: string; reason: string }>;
+  drafts: Array<{ id: number; subject: string; reason: string }>;
+  /** Skipped emails taken off the Skipped tab, and why. */
+  skipped: Array<{ messageId: string; subject: string; reason: string }>;
   errors: string[];
 }
 
 /**
- * Looks each draft's conversation up again and marks the ones that no longer
- * need sending as stale, so they leave the queue. Drafts nothing, sends nothing.
+ * Looks these drafts' and skipped emails' conversations up again (once each)
+ * and takes the ones nobody needs to look at any more out: drafts become stale,
+ * skipped emails leave the Skipped tab. Drafts nothing, sends nothing.
  */
-export async function recheckDrafts(
+export async function recheck(
   deps: Pick<ScanDeps, "config" | "marmalade" | "state">,
-  drafts: Draft[],
+  items: { drafts: Draft[]; skipped: Skipped[] },
   leaveAlone: (draftId: number) => boolean = () => false,
 ): Promise<RecheckResult> {
-  const result: RecheckResult = { outdated: [], errors: [] };
-  await pool(drafts, CONCURRENCY, async (draft) => {
+  const { config, marmalade, state } = deps;
+  const result: RecheckResult = { drafts: [], skipped: [], errors: [] };
+  const ids = [...new Set([...items.drafts, ...items.skipped].map((x) => x.conversationId))];
+  await pool(ids, CONCURRENCY, async (conversationId) => {
+    let conversation: ConversationDetail;
     try {
-      const conversation = await deps.marmalade.getConversation(deps.config.mailboxId, draft.conversationId);
+      conversation = await marmalade.getConversation(config.mailboxId, conversationId);
+    } catch (err) {
+      log.warn("couldn't recheck a conversation", { conversationId, error: errorMessage(err) });
+      result.errors.push(`${conversationId}: ${errorMessage(err)}`);
+      return;
+    }
+    for (const draft of items.drafts.filter((d) => d.conversationId === conversationId)) {
       const reason = outdatedReason(draft, conversation);
       // Checked after the lookup: it may have been sent, discarded or picked up for sending meanwhile.
-      if (!reason || leaveAlone(draft.id) || deps.state.getDraft(draft.id)?.status !== "pending") return;
-      deps.state.setStatus(draft.id, "stale", reason);
-      result.outdated.push({ id: draft.id, subject: draft.subject, reason });
-    } catch (err) {
-      log.warn("couldn't recheck a waiting draft", { draftId: draft.id, error: errorMessage(err) });
-      result.errors.push(`${draft.conversationId}: ${errorMessage(err)}`);
+      if (!reason || leaveAlone(draft.id) || state.getDraft(draft.id)?.status !== "pending") continue;
+      state.setStatus(draft.id, "stale", reason);
+      result.drafts.push({ id: draft.id, subject: draft.subject, reason });
+    }
+    for (const s of items.skipped.filter((x) => x.conversationId === conversationId)) {
+      const reason = outdatedReason(s, conversation);
+      if (reason && state.skippedHandled(s.messageId, reason)) {
+        result.skipped.push({ messageId: s.messageId, subject: s.subject, reason });
+      }
     }
   });
   return result;
 }
 
 /**
- * The Refresh button: takes every waiting draft (both tabs) that no longer
- * needs sending out of the queue. Only conversations that left the open list
- * (archived) or have activity since they were last checked are looked up
- * again, so it's quick when little has changed.
+ * The Refresh button: takes every waiting draft (To review and Confirmations)
+ * and skipped email that nobody needs to look at any more out. Only
+ * conversations that left the open list (archived) or have activity since they
+ * were last checked are looked up again, so it's quick when little has changed.
  */
 export async function refreshQueue(
   deps: Pick<ScanDeps, "config" | "marmalade" | "state">,
@@ -427,13 +454,15 @@ export async function refreshQueue(
 ): Promise<RecheckResult & { checked: number }> {
   const { state } = deps;
   const drafts = state.pendingDrafts();
-  if (drafts.length === 0) return { checked: 0, outdated: [], errors: [] };
+  const skipped = state.unhandledSkipped();
+  const checked = drafts.length + skipped.length;
+  if (checked === 0) return { checked, drafts: [], skipped: [], errors: [] };
   const activity = latestActivity(await listOpen(deps));
-  const moved = drafts.filter((d) => {
-    const at = activity.get(d.conversationId);
-    return at === undefined || at !== state.lastChecked(d.conversationId);
-  });
-  return { checked: drafts.length, ...(await recheckDrafts(deps, moved, leaveAlone)) };
+  const moved = (x: { conversationId: string }) => {
+    const at = activity.get(x.conversationId);
+    return at === undefined || at !== state.lastChecked(x.conversationId);
+  };
+  return { checked, ...(await recheck(deps, { drafts: drafts.filter(moved), skipped: skipped.filter(moved) }, leaveAlone)) };
 }
 
 /**

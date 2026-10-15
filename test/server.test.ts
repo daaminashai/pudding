@@ -505,7 +505,7 @@ describe("Refresh", () => {
 
     const res = await call("/api/drafts/refresh", {});
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ checked: 4, removed: 3, newer: 1, errors: [] });
+    expect(await res.json()).toEqual({ checked: 4, removed: 3, skippedRemoved: 0, newer: 1, errors: [] });
     // Mary's conversation hasn't moved, so it isn't looked up again.
     const fetched = marmalade.requests.map((r) => r.url.pathname).filter((p) => /conversations\/[^/]+$/.test(p));
     expect(fetched.some((p) => p.endsWith("/cnv_mary"))).toBe(false);
@@ -516,6 +516,20 @@ describe("Refresh", () => {
       cnv_grace: "answered in Jelly",
       cnv_linus: "a newer message arrived",
     });
+  });
+
+  it("takes skipped emails a teammate answered or archived off the Skipped tab", async () => {
+    const [bounce, noreply, auto] = [fixtures.mailerDaemon(), fixtures.noreplySender(), fixtures.autoSubmitted()];
+    const { call, state, marmalade } = await setup([bounce, noreply, auto]);
+    marmalade.conversations[0] = { ...bounce, status: "archived" };
+    marmalade.conversations[1] = withMessage(noreply, { inbound: false, from: "team@ours.example", minutesAgo: 1 });
+
+    const res = await call("/api/drafts/refresh", {});
+    expect(await res.json()).toEqual({ checked: 3, removed: 0, skippedRemoved: 2, newer: 0, errors: [] });
+    const snap = await (await call("/api/state")).json();
+    expect(snap.skipped.map((s: { conversationId: string }) => s.conversationId)).toEqual([auto.id]);
+    // Still remembered, so they're never drafted after all.
+    expect(state.hasSeen(noreply.messages[0]!.id)).toBe(true);
   });
 
   it("leaves a draft that's being sent alone, and reports ones it couldn't check", async () => {
