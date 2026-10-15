@@ -6,7 +6,7 @@ import { Hint } from "@/components/Hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ago, copyText } from "@/lib/utils";
+import { ago, copyReply } from "@/lib/utils";
 import type { Draft } from "@/types";
 
 const STATUS: Record<string, { label: string; variant: "default" | "outline" | "muted"; hint: string }> = {
@@ -60,7 +60,7 @@ function Row({ draft }: { draft: Draft }) {
               variant="ghost"
               size="xs"
               className="mt-1"
-              onClick={async () => setCopied(await copyText(draft.finalText!))}
+              onClick={async () => setCopied(await copyReply(draft.finalText!))}
             >
               <Copy />
               {copied ? "Copied" : "Copy"}

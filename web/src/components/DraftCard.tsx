@@ -21,7 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { cn, copyText } from "@/lib/utils";
+import { cn, copyReply } from "@/lib/utils";
 import type { ApproveResult, Draft } from "@/types";
 
 type Busy = null | "sending" | "rewriting" | "discarding";
@@ -80,7 +80,7 @@ export function DraftCard({
     setBusy("sending");
     try {
       const result = await api.approve(draft.id, text);
-      const copied = result.status === "approved" ? await copyText(result.text) : false;
+      const copied = result.status === "approved" ? await copyReply(result.text) : false;
       onApproved(draft, result, copied);
     } catch (e) {
       setError((e as Error).message);

@@ -7,6 +7,10 @@ describe("AI-style check", () => {
     expect(findAiTells(reply)).toEqual([]);
   });
 
+  it("allows [words](url) links, which are sent as links", () => {
+    expect(findAiTells("join [#help](https://chat.example.org/c) on Slack")).toEqual([]);
+  });
+
   it("allows ordinary hyphens and numbers in sentences", () => {
     expect(findAiTells("It's a 2-day event, doors at 9. Bring a laptop.")).toEqual([]);
   });
@@ -18,7 +22,6 @@ describe("AI-style check", () => {
     ["## Details\nIt's free", "markdown heading"],
     ["What to bring:\n- laptop\n- charger", "bullet list"],
     ["Steps:\n1. sign up\n2. come", "numbered list"],
-    ["Apply [here](https://x.example)", "markdown link"],
     ["Great question! It's free.", '"great question"'],
     ["Thanks for reaching out. It's free.", '"thanks for reaching out"'],
     ["It's free. I hope this helps!", '"I hope this helps"'],

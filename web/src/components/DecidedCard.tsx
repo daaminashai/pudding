@@ -4,7 +4,7 @@ import { JellyLink, SenderLine } from "@/components/DraftMeta";
 import { Hint } from "@/components/Hint";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { copyText, safeUrl } from "@/lib/utils";
+import { copyReply, safeUrl } from "@/lib/utils";
 import type { ApproveResult, Draft } from "@/types";
 
 /** What a card turns into once approved: confirmation, and the reply to paste when it wasn't sent. */
@@ -60,7 +60,7 @@ export function DecidedCard({
           <Hint label="Copy the approved reply, to paste into the reply box in Jelly.">
             <Button
               variant="outline"
-              onClick={async () => setCopyLabel((await copyText(result.text)) ? "Copied" : "Couldn't copy")}
+              onClick={async () => setCopyLabel((await copyReply(result.text)) ? "Copied" : "Couldn't copy")}
             >
               <Copy />
               {copyLabel}

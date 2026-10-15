@@ -27,7 +27,6 @@ export function findAiTells(text: string): string[] {
   if (/^\s{0,3}#{1,6}\s/m.test(text)) tells.push("markdown heading");
   if (/^\s*[-*•]\s+\S/m.test(text)) tells.push("bullet list");
   if (/^\s*\d+[.)]\s+\S/m.test(text)) tells.push("numbered list");
-  if (/\[[^\]]+\]\([^)]+\)/.test(text)) tells.push("markdown link");
   for (const [re, label] of PHRASES) {
     if (re.test(text)) tells.push(label);
   }

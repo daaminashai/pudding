@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { plainReply, textToHtml } from "../../../src/reply-html";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -29,11 +30,22 @@ export function duration(seconds: number): string {
   return `about ${Math.round(seconds / 60)} minutes`;
 }
 
-export async function copyText(text: string): Promise<boolean> {
+/** Copies a reply with the same HTML a send uses, so its links paste into Jelly as links. */
+export async function copyReply(text: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob([textToHtml(text)], { type: "text/html" }),
+        "text/plain": new Blob([plainReply(text)], { type: "text/plain" }),
+      }),
+    ]);
     return true;
   } catch {
-    return false;
+    try {
+      await navigator.clipboard.writeText(plainReply(text));
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

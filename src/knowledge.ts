@@ -111,6 +111,8 @@ export interface LearnOptions {
   onProgress?: (fetched: number) => void;
 }
 
+/** Bump when extractExamples changes what it produces, so cached examples are learned again. */
+const EXAMPLES_VERSION = 2;
 /** Keep at most this many copies of the same reply, so one stock answer can't crowd out the rest. */
 const MAX_SAME_REPLY = 2;
 /** Uncached conversations fetched per run while learning; the rest are picked up on later runs. */
@@ -153,13 +155,13 @@ export async function learnFromPastConversations(
     const results = await Promise.all(
       batch.map(async (conversation) => {
         const cached = state.getLearned(conversation.id);
-        if (cached && cached.updatedAt === conversation.updatedAt) return cached.examples;
+        if (cached?.updatedAt === conversation.updatedAt && cached.version === EXAMPLES_VERSION) return cached.examples;
         if (fetched >= MAX_FETCHES_PER_RUN) return [];
         fetched++;
         try {
           const detail = await marmalade.getConversation(o.mailboxId, conversation.id);
           const learned = extractExamples(detail);
-          state.putLearned(conversation.id, conversation.updatedAt, learned);
+          state.putLearned(conversation.id, conversation.updatedAt, EXAMPLES_VERSION, learned);
           return learned;
         } catch (err) {
           log.warn("couldn't learn from conversation", { conversationId: conversation.id, error: errorMessage(err) });
