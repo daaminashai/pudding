@@ -1,4 +1,4 @@
-import { CircleAlert, Inbox, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
+import { CircleAlert, Inbox, ListRestart, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { api } from "@/api";
@@ -39,6 +39,7 @@ export function App() {
   // Drafts ticked for a bulk action, and what each card's reply box says right now.
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const texts = useRef(new Map<number, string>());
+  const [refreshing, setRefreshing] = useState(false);
   const onTextChange = useCallback((id: number, text: string) => {
     texts.current.set(id, text);
   }, []);
@@ -84,6 +85,35 @@ export function App() {
       setSnap(await api.scan());
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  }
+
+  async function refreshQueue() {
+    setRefreshing(true);
+    try {
+      const r = await api.refreshDrafts();
+      if (r.removed > 0) {
+        const handled = r.removed - r.newer;
+        const newer = `Check inbox to draft a fresh reply to ${r.newer === 1 ? "the one" : "the ones"} with a newer email.`;
+        toast(`Took out ${plural(r.removed, "draft")}`, {
+          description:
+            r.newer === 0
+              ? `A teammate already answered or archived ${r.removed === 1 ? "it" : "them"} in Jelly. You'll find ${r.removed === 1 ? "it" : "them"} in Done.`
+              : handled === 0
+                ? newer
+                : `${plural(handled, "was", "were")} already answered or archived in Jelly. ${newer}`,
+        });
+      } else if (r.errors.length === 0) {
+        toast("Nothing to take out", { description: "Every waiting draft still needs a reply." });
+      }
+      if (r.errors.length > 0) {
+        toast.error(`${plural(r.errors.length, "draft")} couldn't be checked`, { description: r.errors[0] });
+      }
+      void refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -167,26 +197,36 @@ export function App() {
             </div>
           ) : (
             <Tabs value={tab} onValueChange={setTab}>
-              <TabsList>
-                <Hint label="Drafted replies waiting for you to approve, rewrite or discard.">
-                  <TabsTrigger value="review">
-                    To review <Count n={pending} />
-                  </TabsTrigger>
-                </Hint>
-                <Hint label="Replies to the sign-up confirmation email that only share a favorite food. Check them over and send them all at once.">
-                  <TabsTrigger value="confirmations">
-                    Confirmations <Count n={snap.confirmations.length} />
-                  </TabsTrigger>
-                </Hint>
-                <Hint label="Replies you sent, approved or discarded, and drafts that went out of date.">
-                  <TabsTrigger value="done">Done</TabsTrigger>
-                </Hint>
-                <Hint label="Emails Pudding didn't draft a reply for: automated mail, and messages that don't need an answer.">
-                  <TabsTrigger value="skipped">
-                    Skipped <Count n={snap.skipped.length} />
-                  </TabsTrigger>
-                </Hint>
-              </TabsList>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <TabsList>
+                  <Hint label="Drafted replies waiting for you to approve, rewrite or discard.">
+                    <TabsTrigger value="review">
+                      To review <Count n={pending} />
+                    </TabsTrigger>
+                  </Hint>
+                  <Hint label="Replies to the sign-up confirmation email that only share a favorite food. Check them over and send them all at once.">
+                    <TabsTrigger value="confirmations">
+                      Confirmations <Count n={snap.confirmations.length} />
+                    </TabsTrigger>
+                  </Hint>
+                  <Hint label="Replies you sent, approved or discarded, and drafts that went out of date.">
+                    <TabsTrigger value="done">Done</TabsTrigger>
+                  </Hint>
+                  <Hint label="Emails Pudding didn't draft a reply for: automated mail, and messages that don't need an answer.">
+                    <TabsTrigger value="skipped">
+                      Skipped <Count n={snap.skipped.length} />
+                    </TabsTrigger>
+                  </Hint>
+                </TabsList>
+                {((tab === "review" && pending > 0) || (tab === "confirmations" && snap.confirmations.length > 0)) && (
+                  <Hint label="Check each waiting draft against Jelly and take out the ones a teammate already answered or archived. Nothing is drafted or sent.">
+                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void refreshQueue()} disabled={refreshing}>
+                      {refreshing ? <LoaderCircle className="animate-spin" /> : <ListRestart />}
+                      {refreshing ? "Refreshing…" : "Refresh"}
+                    </Button>
+                  </Hint>
+                )}
+              </div>
 
               <TabsContent value="review" className="space-y-4">
                 <ReviewToolbar

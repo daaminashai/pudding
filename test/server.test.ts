@@ -8,7 +8,7 @@ import { JellySendError, JellySessionError } from "../src/jelly.js";
 import { ConversationChangedError, ManualSender, type Sender } from "../src/send.js";
 import { Dashboard } from "../src/server.js";
 import type { Draft } from "../src/state.js";
-import { conversation, fixtures, message } from "./fixtures.js";
+import { conversation, fixtures, message, withMessage } from "./fixtures.js";
 import { knowledgeDir, scanDeps } from "./helpers.js";
 
 let server: Server | undefined;
@@ -136,6 +136,15 @@ describe("dashboard API", () => {
     const res = await call(`/api/drafts/${draft.id}/approve`, { text: "hi" });
     expect(res.status).toBe(409);
     expect(state.getDraft(draft.id)).toMatchObject({ status: "stale", statusReason: "a newer message arrived" });
+  });
+
+  it("won't approve once the conversation is archived in Jelly", async () => {
+    const { call, draft, state, marmalade } = await setup();
+    marmalade.conversations[0] = { ...marmalade.conversations[0]!, status: "archived" };
+    const res = await call(`/api/drafts/${draft.id}/approve`, { text: "hi" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("Not approved: archived in Jelly.");
+    expect(state.getDraft(draft.id)).toMatchObject({ status: "stale", statusReason: "archived in Jelly" });
   });
 
   it("discards a draft", async () => {
@@ -472,5 +481,61 @@ describe("bulk actions in To review", () => {
   it("refuses a bulk discard with nothing selected", async () => {
     const { call } = await setupReplies();
     expect((await call("/api/drafts/discard", { ids: [] })).status).toBe(400);
+  });
+});
+
+describe("Refresh", () => {
+  const questions = () =>
+    ["Ada", "Grace", "Linus", "Mary"].map((name, i) =>
+      conversation({
+        id: `cnv_${name.toLowerCase()}`,
+        subject: `Question from ${name}`,
+        messages: [{ id: `msg_${name.toLowerCase()}`, from: `${name.toLowerCase()}@example.com`, minutesAgo: 30 - i }],
+      }),
+    );
+
+  it("takes out drafts a teammate answered or archived in Jelly, and ones with a newer email", async () => {
+    const { call, state, marmalade } = await setup(questions());
+    const [ada, grace, linus] = marmalade.conversations;
+    marmalade.conversations[0] = { ...ada!, status: "archived" };
+    marmalade.conversations[1] = withMessage(grace!, { inbound: false, from: "team@ours.example", minutesAgo: 1 });
+    marmalade.conversations[2] = withMessage(linus!, { text: "also, is it free?", minutesAgo: 1 });
+
+    marmalade.requests.length = 0;
+
+    const res = await call("/api/drafts/refresh", {});
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ checked: 4, removed: 3, newer: 1, errors: [] });
+    // Mary's conversation hasn't moved, so it isn't looked up again.
+    const fetched = marmalade.requests.map((r) => r.url.pathname).filter((p) => /conversations\/[^/]+$/.test(p));
+    expect(fetched.some((p) => p.endsWith("/cnv_mary"))).toBe(false);
+    expect(fetched).toHaveLength(3);
+    expect(state.pendingDrafts().map((d) => d.conversationId)).toEqual(["cnv_mary"]);
+    expect(Object.fromEntries(state.decidedDrafts().map((d) => [d.conversationId, d.statusReason]))).toEqual({
+      cnv_ada: "archived in Jelly",
+      cnv_grace: "answered in Jelly",
+      cnv_linus: "a newer message arrived",
+    });
+  });
+
+  it("leaves a draft that's being sent alone, and reports ones it couldn't check", async () => {
+    const sender = new FakeSender();
+    let open!: () => void;
+    sender.gate = new Promise((r) => (open = r));
+    const { call, state, marmalade } = await setup(questions(), sender);
+    const [a, b] = state.pendingDrafts().map((d) => d.id);
+    const approving = call(`/api/drafts/${a}/approve`, { text: "hi" });
+    await new Promise((r) => setTimeout(r, 20));
+    // Sending archives the conversation in Jelly.
+    marmalade.conversations[0] = { ...marmalade.conversations[0]!, status: "archived" };
+    marmalade.conversations[1] = { ...marmalade.conversations[1]!, status: "archived" };
+    marmalade.failing.add("cnv_grace");
+
+    const result = await (await call("/api/drafts/refresh", {})).json();
+    expect(result).toMatchObject({ checked: 4, removed: 0, errors: [expect.stringMatching(/^cnv_grace: .*503/)] });
+    open();
+    expect((await approving).status).toBe(200);
+    expect(state.getDraft(a!)!.status).toBe("sent");
+    expect(state.getDraft(b!)!.status).toBe("pending");
   });
 });

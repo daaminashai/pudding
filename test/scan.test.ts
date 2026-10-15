@@ -229,6 +229,31 @@ describe("scan", () => {
     expect(state.decidedDrafts()[0]).toMatchObject({ status: "stale", statusReason: "answered in Jelly" });
   });
 
+  it("takes drafts out of the queue once their conversation is archived in Jelly", async () => {
+    const [a, b, c] = ["a", "b", "c"].map((x) => conversation({ id: `cnv_${x}`, messages: [{ from: `${x}@example.com` }] }));
+    const { deps, state, marmalade } = scanDeps([a!, b!, c!]);
+    await scan(deps);
+    // Archived conversations drop out of the open list, with or without a reply.
+    marmalade.conversations[0] = { ...a!, status: "archived" };
+    marmalade.conversations[1] = {
+      ...withMessage(b!, { inbound: false, from: "team@ours.example", minutesAgo: 1 }),
+      status: "archived",
+    };
+    marmalade.requests.length = 0;
+
+    const { progress } = await scan(deps);
+
+    expect(state.pendingDrafts().map((d) => d.conversationId)).toEqual(["cnv_c"]);
+    expect(Object.fromEntries(state.decidedDrafts().map((d) => [d.conversationId, d.statusReason]))).toEqual({
+      cnv_a: "archived in Jelly",
+      cnv_b: "answered and archived in Jelly",
+    });
+    expect(progress.message).toBe("No new emails since the last check. Took out 2 draft(s) already handled in Jelly.");
+    // Only those two were looked up again.
+    const fetched = marmalade.requests.map((r) => r.url.pathname).filter((p) => /conversations\/[^/]+$/.test(p));
+    expect(fetched.sort()).toEqual(["cnv_a", "cnv_b"].map((id) => `/api/rpc/mailboxes/${MAILBOX}/conversations/${id}`));
+  });
+
   it("flags assigned conversations instead of skipping them", async () => {
     const { deps, state, marmalade } = scanDeps([fixtures.clean()]);
     marmalade.assignments.cnv_clean = [

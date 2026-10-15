@@ -25,8 +25,9 @@ export function fakeMarmalade(conversations: ConversationDetail[]) {
     requests.push({ method: init?.method ?? "GET", url, auth: headers.Authorization });
     const p = url.pathname.replace(/^\/api\/rpc/, "");
     if (p === `/mailboxes/${MAILBOX}/conversations`) {
+      const status = url.searchParams.get("status");
       return json(
-        conversations.map((c) => {
+        conversations.filter((c) => !status || c.status === status).map((c) => {
           const { messages: _m, comments: _c, ...summary } = c;
           return { conversation: summary, mailboxId: MAILBOX };
         }),
